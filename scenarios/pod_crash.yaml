@@ -1,0 +1,49 @@
+# 应急演练场景配置 - Pod 崩溃场景
+# 模拟核心业务 Pod 意外崩溃
+
+scenario:
+  name: "核心业务Pod崩溃演练"
+  description: "模拟计费系统 Pod 意外崩溃，验证自愈能力和监控告警"
+  type: "pod_crash"
+
+# 目标资源
+target:
+  namespace: "default"
+  # Pod 名称（运行时需要替换为实际的 Pod 名称）
+  pod_name: "nginx-demo-xxxx-xxxx"
+  # 或者使用标签选择器（未来版本支持）
+  # label_selector: "app=nginx"
+
+# 预期结果
+expected:
+  # 期望的恢复时间（秒）
+  recovery_time: 30
+  # 期望触发的告警名称
+  alert_name: "PodCrashLooping"
+  # 告警应在多少秒内触发
+  alert_timeout: 180
+
+# 验证项
+validation:
+  # 是否验证 Pod 自动恢复
+  check_recovery: true
+  # 是否验证监控告警
+  check_alert: true
+  # 是否生成报告
+  generate_report: true
+
+# Prometheus 配置（用于告警验证）
+prometheus:
+  url: "http://localhost:9090"
+  # 如果需要认证，配置以下参数
+  # username: "admin"
+  # password: "password"
+
+# 报告配置
+report:
+  # 报告输出路径
+  output_dir: "./reports"
+  # 报告格式（markdown, pdf）
+  format: "markdown"
+  # 是否包含 Grafana 截图
+  include_screenshot: false
