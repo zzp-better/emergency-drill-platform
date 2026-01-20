@@ -623,9 +623,12 @@ class ChaosMeshInjector:
             
             # 3. 检查 Pod 是否有 Chaos Mesh sidecar
             containers = pod.spec.containers or []
-            sidecar_names = [c.name for c in containers if 'chaos' in c.name.lower()]
+            # Chaos Mesh sidecar 可能的名称: chaos-daemon, chaos-mesh, chaos-sidecar 等
+            sidecar_keywords = ['chaos', 'bypass', 'sidecar']
+            sidecar_names = [c.name for c in containers if any(kw in c.name.lower() for kw in sidecar_keywords)]
             result["details"]["has_chaos_sidecar"] = len(sidecar_names) > 0
             result["details"]["sidecar_names"] = sidecar_names
+            result["details"]["all_containers"] = [c.name for c in containers]
             
             # 4. 检查 Pod 的注解
             annotations = pod.metadata.annotations or {}
@@ -648,9 +651,15 @@ class ChaosMeshInjector:
             experiment_phase = result["details"].get("experiment_phase", "")
             
             # Chaos 资源存在且实验正在运行
-            if chaos_phase in ["Running", ""] and experiment_phase == "Running":
+            # 注意：chaos_phase 可能是 "Running", "Unknown", "" 或其他值
+            # experiment_phase 为 "Running" 表示实验正在进行
+            if experiment_phase == "Running":
                 result["verified"] = True
                 result["details"]["message"] = "故障已成功注入并正在运行"
+            elif chaos_phase in ["Running", ""] and not experiment_phase:
+                # 兼容旧版本或某些情况
+                result["verified"] = True
+                result["details"]["message"] = "故障已成功注入"
             else:
                 result["details"]["message"] = f"故障状态异常: chaos_phase={chaos_phase}, experiment_phase={experiment_phase}"
             

@@ -171,6 +171,10 @@ def cpu_stress():
             if verify_result['details'].get('sidecar_names'):
                 print(f"Sidecar 容器: {', '.join(verify_result['details']['sidecar_names'])}")
             
+            # 显示所有容器名称，便于调试
+            if verify_result['details'].get('all_containers'):
+                print(f"所有容器: {', '.join(verify_result['details']['all_containers'])}")
+            
             if not verify_result['verified']:
                 print()
                 print("⚠️  故障可能未正确注入，原因：")
@@ -185,6 +189,15 @@ def cpu_stress():
                     print("   3. 是否需要为 Pod 添加注解以启用 Chaos Mesh")
                     print()
                     print("   例如：kubectl annotate pod <pod-name> chaos-mesh.org/chaos-inject=\"true\"")
+                else:
+                    print()
+                    print("💡 提示：Sidecar 已存在，但 Chaos 资源状态异常")
+                    print("   请检查：")
+                    print("   1. Chaos Mesh Controller 是否正常运行")
+                    print("   2. Chaos 资源是否正确创建")
+                    print()
+                    print("   查看故障详情：kubectl get stresschaos -n " + namespace)
+                    print("   查看故障日志：kubectl logs -n chaos-mesh -l app.kubernetes.io/name=chaos-mesh")
         else:
             print("❌ CPU 压测故障注入失败")
             print(f"   错误: {result['message']}")
