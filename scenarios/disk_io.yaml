@@ -1,0 +1,85 @@
+# 应急演练场景配置 - 磁盘 IO 故障场景
+# 模拟磁盘 IO 故障，验证系统在存储问题下的表现
+
+scenario:
+  name: "磁盘 IO 故障演练"
+  description: "模拟磁盘 IO 故障（磁盘填充、读写错误），验证系统在存储问题下的自愈能力和监控告警"
+  type: "disk_io"
+  engine: "chaos_mesh"
+
+# 目标资源
+target:
+  namespace: "default"
+  # Pod 名称（运行时需要替换为实际的 Pod 名称）
+  pod_name: "nginx-demo-xxxx-xxxx"
+  # 或者使用标签选择器（未来版本支持）
+  # label_selector: "app=nginx"
+
+# 故障配置
+fault:
+  # 磁盘故障类型
+  # disk_fill: 磁盘填充（模拟磁盘空间不足）
+  # disk_read_error: 磁盘读错误（模拟磁盘读取失败）
+  # disk_write_error: 磁盘写错误（模拟磁盘写入失败）
+  fault_type: "disk_fill"
+  
+  # 磁盘填充配置（fault_type=disk_fill 时使用）
+  fill:
+    # 目标路径
+    path: "/var/log"
+    # 填充大小（Chaos Mesh 使用字节数，不带单位）
+    # 示例：100Mi = 104857600, 1Gi = 1073741824
+    size: "1073741824"
+  
+  # 磁盘读写错误配置（fault_type=disk_read_error 或 disk_write_error 时使用）
+  io_error:
+    # 错误百分比（0-100）
+    percent: 100
+  
+  # 故障持续时间
+  duration: "60s"
+
+# 预期结果
+expected:
+  # 期望的告警名称
+  alert_name: "DiskSpaceLow"
+  # 告警应在多少秒内触发
+  alert_timeout: 180
+  # 磁盘使用率阈值（超过此值触发告警）
+  disk_threshold: 80
+
+# 验证项
+validation:
+  # 是否验证监控告警
+  check_alert: true
+  # 是否验证磁盘可用性
+  check_disk: true
+  # 是否生成报告
+  generate_report: true
+
+# Prometheus 配置（用于告警验证）
+prometheus:
+  url: "http://localhost:9090"
+  # 如果需要认证，配置以下参数
+  # username: "admin"
+  # password: "password"
+
+# 报告配置
+report:
+  # 报告输出路径
+  output_dir: "./reports"
+  # 报告格式（markdown, pdf）
+  format: "markdown"
+  # 是否包含 Grafana 截图
+  include_screenshot: false
+  # 是否包含磁盘指标
+  include_metrics: true
+
+# 恢复配置
+recovery:
+  # 故障结束后是否自动清理
+  auto_cleanup: true
+  # 清理超时时间（秒）
+  cleanup_timeout: 60
+  # 是否清理填充的文件
+  cleanup_fill_files: true

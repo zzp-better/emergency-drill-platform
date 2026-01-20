@@ -1,0 +1,79 @@
+# 应急演练场景配置 - CPU 压测场景
+# 模拟应用 CPU 资源耗尽，验证系统在高负载下的表现
+
+scenario:
+  name: "CPU 压力测试演练"
+  description: "模拟应用 CPU 资源耗尽，验证系统在高负载下的自愈能力和监控告警"
+  type: "cpu_stress"
+  engine: "chaos_mesh"
+
+# 目标资源
+target:
+  namespace: "default"
+  # Pod 名称（运行时需要替换为实际的 Pod 名称）
+  pod_name: "nginx-demo-xxxx-xxxx"
+  # 或者使用标签选择器（未来版本支持）
+  # label_selector: "app=nginx"
+
+# 故障配置
+fault:
+  # CPU 压测配置
+  cpu:
+    # CPU 核心数（使用多少个核心进行压测）
+    workers: 2
+    # CPU 负载百分比（100 表示满载）
+    load: 100
+  
+  # 内存压测配置（可选）
+  memory:
+    # 是否启用内存压测
+    enabled: false
+    # 压测内存大小（Chaos Mesh 使用字节数，不带单位）
+    # 示例：100Mi = 104857600, 1Gi = 1073741824
+    size: "104857600"
+  
+  # 故障持续时间
+  duration: "60s"
+
+# 预期结果
+expected:
+  # 期望的告警名称
+  alert_name: "HighCPUUsage"
+  # 告警应在多少秒内触发
+  alert_timeout: 180
+  # CPU 使用率阈值（超过此值触发告警）
+  cpu_threshold: 80
+
+# 验证项
+validation:
+  # 是否验证监控告警
+  check_alert: true
+  # 是否验证系统性能
+  check_performance: true
+  # 是否生成报告
+  generate_report: true
+
+# Prometheus 配置（用于告警验证）
+prometheus:
+  url: "http://localhost:9090"
+  # 如果需要认证，配置以下参数
+  # username: "admin"
+  # password: "password"
+
+# 报告配置
+report:
+  # 报告输出路径
+  output_dir: "./reports"
+  # 报告格式（markdown, pdf）
+  format: "markdown"
+  # 是否包含 Grafana 截图
+  include_screenshot: false
+  # 是否包含性能指标
+  include_metrics: true
+
+# 恢复配置
+recovery:
+  # 故障结束后是否自动清理
+  auto_cleanup: true
+  # 清理超时时间（秒）
+  cleanup_timeout: 60
