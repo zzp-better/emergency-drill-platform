@@ -649,10 +649,13 @@ class ChaosMeshInjector:
             # 判断是否验证成功
             chaos_phase = result["details"].get("chaos_phase", "")
             experiment_phase = result["details"].get("experiment_phase", "")
+            has_sidecar = result["details"].get("has_chaos_sidecar", False)
             
             # Chaos 资源存在且实验正在运行
             # 注意：chaos_phase 可能是 "Running", "Unknown", "" 或其他值
             # experiment_phase 为 "Running" 表示实验正在进行
+            # 注意：某些故障类型（如 StressChaos）可能通过 DaemonSet 注入，不需要 Pod 级别的 sidecar
+            # 因此，只要实验状态为 Running，就认为故障注入成功
             if experiment_phase == "Running":
                 result["verified"] = True
                 result["details"]["message"] = "故障已成功注入并正在运行"
@@ -660,6 +663,10 @@ class ChaosMeshInjector:
                 # 兼容旧版本或某些情况
                 result["verified"] = True
                 result["details"]["message"] = "故障已成功注入"
+            elif has_sidecar:
+                # 有 sidecar 但状态未知，可能是刚创建
+                result["verified"] = True
+                result["details"]["message"] = "故障已注入（sidecar 存在，等待实验启动）"
             else:
                 result["details"]["message"] = f"故障状态异常: chaos_phase={chaos_phase}, experiment_phase={experiment_phase}"
             
