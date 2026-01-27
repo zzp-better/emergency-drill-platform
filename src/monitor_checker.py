@@ -35,7 +35,7 @@ class PrometheusClient:
             username: 用户名（可选）
             password: 密码（可选）
         """
-        self.url = url.rstrip('/')
+        self.url=url.rstrip('/')
         self.auth = (username, password) if username and password else None
         logger.info(f"✓ Prometheus 客户端初始化成功: {self.url}")
 
@@ -237,8 +237,8 @@ def main():
     print("-" * 60)
     print("请配置你的 Prometheus 地址")
     print()
-    prometheus_url = input("Prometheus URL [http://localhost:9090]: ").strip() or "http://localhost:9090"
-
+    #prometheus_url = input("Prometheus URL [http://localhost:9090]: ").strip() or "http://192.168.56.66:9090"
+    prometheus_url = 'http://192.168.56.66:9090'
     try:
         # 初始化监控验证器
         checker = MonitorChecker(prometheus_url)
@@ -293,18 +293,6 @@ def main():
         print("\n\n操作已取消")
     except Exception as e:
         logger.error(f"发生错误: {e}")
-
-    print()
-    print("【使用说明】")
-    print("-" * 60)
-    print("在你的代码中使用监控验证器：")
-    print()
-    print("  from monitor_checker import MonitorChecker")
-    print()
-    print("  checker = MonitorChecker('http://prometheus:9090')")
-    print("  result = checker.wait_for_alert('PodCrashLooping', timeout=300)")
-    print("  print(f'告警触发: {result[\"triggered\"]}')")
-    print()
 
 
 if __name__ == "__main__":
