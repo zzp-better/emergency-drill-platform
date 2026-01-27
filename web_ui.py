@@ -11,8 +11,15 @@
 import streamlit as st
 import yaml
 import os
+import sys
 from datetime import datetime
 import pandas as pd
+
+# 添加 src 目录到 Python 路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from chaos_injector import ChaosInjector
+from monitor_checker import MonitorChecker
 
 # 页面配置
 st.set_page_config(
@@ -54,6 +61,12 @@ if 'drill_history' not in st.session_state:
 if 'current_drill' not in st.session_state:
     st.session_state.current_drill = None
 
+if 'chaos_injector' not in st.session_state:
+    st.session_state.chaos_injector = None
+
+if 'monitor_checker' not in st.session_state:
+    st.session_state.monitor_checker = None
+
 
 def load_scenarios():
     """加载故障场景配置"""
@@ -74,6 +87,32 @@ def load_scenarios():
                     })
     
     return scenarios
+
+
+def init_chaos_injector(use_chaos_mesh=False):
+    """初始化故障注入器"""
+    if st.session_state.chaos_injector is None:
+        try:
+            st.session_state.chaos_injector = ChaosInjector(use_chaos_mesh=use_chaos_mesh)
+            st.success("✓ 故障注入器初始化成功")
+            return True
+        except Exception as e:
+            st.error(f"✗ 故障注入器初始化失败: {e}")
+            return False
+    return True
+
+
+def init_monitor_checker(prometheus_url, username=None, password=None):
+    """初始化监控验证器"""
+    if st.session_state.monitor_checker is None:
+        try:
+            st.session_state.monitor_checker = MonitorChecker(prometheus_url, username, password)
+            st.success("✓ 监控验证器初始化成功")
+            return True
+        except Exception as e:
+            st.error(f"✗ 监控验证器初始化失败: {e}")
+            return False
+    return True
 
 
 def page_home():
@@ -97,11 +136,20 @@ def page_home():
         )
     
     with col3:
-        st.metric(
-            label="成功率",
-            value="100%",
-            delta="暂无失败"
-        )
+        success_count = len([d for d in st.session_state.drill_history if d.get('status') == '成功'])
+        if st.session_state.drill_history:
+            success_rate = (success_count / len(st.session_state.drill_history)) * 100
+            st.metric(
+                label="成功率",
+                value=f"{success_rate:.1f}%",
+                delta=f"{success_count}/{len(st.session_state.drill_history)}"
+            )
+        else:
+            st.metric(
+                label="成功率",
+                value="N/A",
+                delta="暂无数据"
+            )
     
     st.markdown("---")
     
@@ -127,9 +175,15 @@ def page_home():
     
     if st.session_state.drill_history:
         df = pd.DataFrame(st.session_state.drill_history)
-        df = df[['time', 'scenario', 'status', 'duration']]
-        df.columns = ['时间', '场景', '状态', '耗时(秒)']
-        st.dataframe(df, use_container_width=True)
+        if not df.empty:
+            # 选择要显示的列
+            display_cols = ['time', 'scenario', 'status', 'duration']
+            if all(col in df.columns for col in display_cols):
+                df_display = df[display_cols]
+                df_display.columns = ['时间', '场景', '状态', '耗时(秒)']
+                st.dataframe(df_display, use_container_width=True)
+            else:
+                st.dataframe(df, use_container_width=True)
     else:
         st.info("暂无演练记录，请先执行演练")
 
@@ -137,6 +191,18 @@ def page_home():
 def page_fault_injection():
     """故障注入页面"""
     st.title("⚡ 故障注入")
+    
+    # 初始化故障注入器
+    with st.expander("⚙️ 故障注入器配置", expanded=True):
+        use_chaos_mesh = st.checkbox("使用 Chaos Mesh", value=False, help="启用后可使用更多故障场景")
+        
+        if st.button("🔄 初始化故障注入器"):
+            if init_chaos_injector(use_chaos_mesh):
+                st.rerun()
+    
+    if st.session_state.chaos_injector is None:
+        st.warning("请先初始化故障注入器")
+        return
     
     # 加载场景配置
     scenarios = load_scenarios()
@@ -176,51 +242,82 @@ def page_fault_injection():
     with col2:
         if st.button("🚀 开始演练", use_container_width=True, type="primary"):
             with st.spinner("正在执行演练..."):
-                # 模拟演练过程
-                import time
-                start_time = time.time()
+                start_time = datetime.now()
                 
-                # 模拟故障注入
-                st.info(f"正在注入故障: {scenario['name']}")
-                time.sleep(2)
+                # 根据场景类型执行故障注入
+                result = None
+                scenario_type = scenario['type']
                 
-                # 模拟监控验证
-                st.info("正在验证监控告警...")
-                time.sleep(2)
+                try:
+                    if scenario_type == 'pod_crash':
+                        result = st.session_state.chaos_injector.delete_pod(namespace, pod_name)
+                    elif scenario_type == 'cpu_stress':
+                        result = st.session_state.chaos_injector.inject_cpu_stress(
+                            namespace=namespace,
+                            pod_name=pod_name,
+                            duration='60s'
+                        )
+                    elif scenario_type == 'network_delay':
+                        result = st.session_state.chaos_injector.inject_network_delay(
+                            namespace=namespace,
+                            pod_name=pod_name,
+                            duration='60s'
+                        )
+                    elif scenario_type == 'disk_io':
+                        result = st.session_state.chaos_injector.inject_disk_failure(
+                            namespace=namespace,
+                            pod_name=pod_name,
+                            duration='60s'
+                        )
+                    else:
+                        st.error(f"未知的场景类型: {scenario_type}")
+                        return
+                    
+                    end_time = datetime.now()
+                    duration = (end_time - start_time).total_seconds()
+                    
+                    # 记录演练历史
+                    st.session_state.drill_history.append({
+                        'time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        'scenario': scenario['name'],
+                        'status': '成功' if result.get('success', False) else '失败',
+                        'duration': round(duration, 2),
+                        'message': result.get('message', '')
+                    })
+                    
+                    if result.get('success', False):
+                        st.success(f"✅ 演练完成！耗时: {duration:.2f} 秒")
+                    else:
+                        st.error(f"❌ 演练失败: {result.get('message', '未知错误')}")
+                    
+                    # 显示演练结果
+                    st.markdown("---")
+                    st.subheader("📊 演练结果")
+                    
+                    result_data = {
+                        '场景名称': scenario['name'],
+                        '故障类型': scenario['type'],
+                        '命名空间': namespace,
+                        'Pod 名称': pod_name if pod_name else 'N/A',
+                        '演练状态': '<span class="status-success">成功</span>' if result.get('success', False) else '<span class="status-error">失败</span>',
+                        '耗时': f'{duration:.2f} 秒',
+                        '完成时间': end_time.strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    
+                    for key, value in result_data.items():
+                        st.markdown(f"**{key}**: {value}", unsafe_allow_html=True)
+                    
+                    # 显示详细信息
+                    if result.get('recovery_time'):
+                        st.info(f"📈 Pod 恢复时间: {result['recovery_time']} 秒")
+                    
+                    if result.get('message'):
+                        st.info(f"💬 消息: {result['message']}")
                 
-                # 模拟恢复检测
-                st.info("正在检测系统恢复...")
-                time.sleep(1)
-                
-                end_time = time.time()
-                duration = round(end_time - start_time, 2)
-                
-                # 记录演练历史
-                st.session_state.drill_history.append({
-                    'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'scenario': scenario['name'],
-                    'status': '成功',
-                    'duration': duration
-                })
-                
-                st.success(f"✅ 演练完成！耗时: {duration} 秒")
-                
-                # 显示演练结果
-                st.markdown("---")
-                st.subheader("📊 演练结果")
-                
-                result_data = {
-                    '场景名称': scenario['name'],
-                    '故障类型': scenario['type'],
-                    '命名空间': namespace,
-                    'Pod 名称': pod_name if pod_name else 'N/A',
-                    '演练状态': '<span class="status-success">成功</span>',
-                    '耗时': f'{duration} 秒',
-                    '完成时间': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
-                
-                for key, value in result_data.items():
-                    st.markdown(f"**{key}**: {value}", unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"❌ 演练执行出错: {e}")
+                    import traceback
+                    st.error(traceback.format_exc())
 
 
 def page_monitoring():
@@ -236,8 +333,16 @@ def page_monitoring():
         prometheus_url = st.text_input("Prometheus URL", value="http://192.168.56.66:9090")
     
     with col2:
-        st.text_input("用户名", placeholder="可选")
-        st.text_input("密码", type="password", placeholder="可选")
+        username = st.text_input("用户名", placeholder="可选")
+        password = st.text_input("密码", type="password", placeholder="可选")
+    
+    if st.button("🔄 初始化监控验证器"):
+        if init_monitor_checker(prometheus_url, username, password):
+            st.rerun()
+    
+    if st.session_state.monitor_checker is None:
+        st.warning("请先初始化监控验证器")
+        return
     
     st.markdown("---")
     
@@ -254,56 +359,50 @@ def page_monitoring():
     
     if st.button("🔍 查询告警", use_container_width=True):
         with st.spinner("正在查询告警..."):
-            # 模拟查询过程
-            import time
-            time.sleep(1)
+            # 查询告警
+            alert = st.session_state.monitor_checker.prometheus.query_alert_by_name(alert_name)
             
-            # 模拟告警数据
-            alerts = [
-                {
-                    'name': 'PodCrashLooping',
-                    'severity': 'warning',
-                    'state': 'firing',
-                    'summary': 'Pod nginx-deployment-xxx is crash looping',
-                    'labels': {
-                        'namespace': 'default',
-                        'pod': 'nginx-deployment-xxx'
-                    }
-                },
-                {
-                    'name': 'HighCPUUsage',
-                    'severity': 'critical',
-                    'state': 'pending',
-                    'summary': 'CPU usage is above 80%',
-                    'labels': {
-                        'namespace': 'monitoring',
-                        'pod': 'prometheus-0'
-                    }
-                }
-            ]
-            
-            if alerts:
-                st.success(f"✓ 查询到 {len(alerts)} 个告警")
+            if alert:
+                st.success(f"✓ 找到告警: {alert_name}")
                 
-                for i, alert in enumerate(alerts, 1):
-                    with st.expander(f"{i}. {alert['name']} - {alert['state'].upper()}"):
-                        st.write(f"**严重级别**: {alert['severity']}")
-                        st.write(f"**状态**: {alert['state']}")
-                        st.write(f"**描述**: {alert['summary']}")
-                        st.write(f"**标签**: {alert['labels']}")
+                labels = alert.get('labels', {})
+                with st.expander(f"📋 告警详情", expanded=True):
+                    st.write(f"**告警名称**: {labels.get('alertname', 'N/A')}")
+                    st.write(f"**严重级别**: {labels.get('severity', 'N/A')}")
+                    st.write(f"**状态**: {alert.get('state', 'N/A')}")
+                    st.write(f"**描述**: {alert.get('annotations', {}).get('summary', 'N/A')}")
+                    st.write(f"**标签**: {labels}")
             else:
-                st.info("当前没有活跃告警")
+                st.info(f"未找到告警: {alert_name}")
     
     st.markdown("---")
     
-    # 实时告警监控
-    st.subheader("📡 实时告警监控")
+    # 查询所有告警
+    col1, col2 = st.columns([2, 1])
     
-    if st.button("🔄 刷新告警", use_container_width=True):
-        with st.spinner("正在刷新..."):
-            import time
-            time.sleep(0.5)
-            st.success("✓ 告警已刷新")
+    with col1:
+        if st.button("📡 查询所有告警", use_container_width=True):
+            with st.spinner("正在查询所有告警..."):
+                alerts = st.session_state.monitor_checker.prometheus.query_alerts()
+                
+                if alerts:
+                    st.success(f"✓ 查询到 {len(alerts)} 个告警")
+                    
+                    for i, alert in enumerate(alerts, 1):
+                        labels = alert.get('labels', {})
+                        with st.expander(f"{i}. {labels.get('alertname', 'N/A')} - {alert.get('state', 'N/A').upper()}"):
+                            st.write(f"**严重级别**: {labels.get('severity', 'N/A')}")
+                            st.write(f"**状态**: {alert.get('state', 'N/A')}")
+                            st.write(f"**描述**: {alert.get('annotations', {}).get('summary', 'N/A')}")
+                            st.write(f"**标签**: {labels}")
+                else:
+                    st.info("当前没有活跃告警")
+    
+    with col2:
+        if st.button("🔄 刷新告警", use_container_width=True):
+            with st.spinner("正在刷新..."):
+                st.success("✓ 告警已刷新")
+                st.rerun()
 
 
 def page_reports():
@@ -353,8 +452,11 @@ def page_reports():
             st.metric("总演练次数", len(df))
         
         with col2:
-            avg_duration = df['duration'].mean()
-            st.metric("平均耗时", f"{avg_duration:.2f} 秒")
+            if 'duration' in df.columns:
+                avg_duration = df['duration'].mean()
+                st.metric("平均耗时", f"{avg_duration:.2f} 秒")
+            else:
+                st.metric("平均耗时", "N/A")
         
         with col3:
             success_count = len(df[df['status'] == '成功'])
@@ -365,8 +467,9 @@ def page_reports():
         st.markdown("---")
         st.subheader("场景分布")
         
-        scenario_counts = df['scenario'].value_counts()
-        st.bar_chart(scenario_counts)
+        if 'scenario' in df.columns:
+            scenario_counts = df['scenario'].value_counts()
+            st.bar_chart(scenario_counts)
     else:
         st.info("暂无演练数据")
 
@@ -398,6 +501,8 @@ def page_settings():
     
     namespace = st.text_input("默认命名空间", value="default")
     
+    use_chaos_mesh = st.checkbox("使用 Chaos Mesh", value=False, help="启用后可使用更多故障场景")
+    
     st.markdown("---")
     
     st.subheader("🔔 通知配置")
@@ -416,6 +521,12 @@ def page_settings():
     
     if st.button("💾 保存配置", use_container_width=True, type="primary"):
         st.success("✓ 配置已保存")
+        
+        # 重新初始化组件
+        if st.session_state.chaos_injector is not None or st.session_state.monitor_checker is not None:
+            st.session_state.chaos_injector = None
+            st.session_state.monitor_checker = None
+            st.info("组件已重置，请重新初始化")
 
 
 def main():
@@ -425,19 +536,25 @@ def main():
         st.title("🚨 EDAP")
         st.markdown("---")
         
+        # 系统状态
+        st.subheader("系统状态")
+        if st.session_state.chaos_injector is not None:
+            st.success("✓ 故障注入器就绪")
+        else:
+            st.warning("⚠ 故障注入器未初始化")
+        
+        if st.session_state.monitor_checker is not None:
+            st.success("✓ 监控验证器就绪")
+        else:
+            st.warning("⚠ 监控验证器未初始化")
+        
+        st.markdown("---")
+        
         page = st.radio(
             "导航",
             ["🏠 首页", "⚡ 故障注入", "📊 监控验证", "📄 演练报告", "⚙️ 设置"],
             label_visibility="collapsed"
         )
-        
-        st.markdown("---")
-        
-        # 系统状态
-        st.subheader("系统状态")
-        st.success("✓ K8s 连接正常")
-        st.success("✓ Prometheus 连接正常")
-        st.success("✓ Chaos Mesh 就绪")
     
     # 页面路由
     if page == "🏠 首页":
