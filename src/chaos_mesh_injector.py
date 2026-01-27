@@ -41,7 +41,7 @@ class ChaosMeshInjector:
             logger.error(f"✗ Chaos Mesh 客户端初始化失败: {e}")
             raise
 
-    def create_stress_chaos(self, namespace: str, pod_name: str, 
+    def create_stress_chaos(self, namespace: str, pod_name: str,
                           cpu_count: Optional[int] = None,
                           memory_size: Optional[str] = None,
                           duration: str = "60s") -> Dict:
@@ -58,6 +58,17 @@ class ChaosMeshInjector:
         返回：
             dict: 故障注入结果
         """
+        # 验证至少有一个 stressor
+        if not cpu_count and not memory_size:
+            return {
+                "chaos_type": "stress",
+                "chaos_name": None,
+                "namespace": namespace,
+                "inject_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "success": False,
+                "message": "至少需要指定 cpu_count 或 memory_size 其中一个参数"
+            }
+
         chaos_name = f"stress-{pod_name}-{int(time.time())}"
 
         spec = {

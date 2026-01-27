@@ -237,8 +237,11 @@ def main():
     print("-" * 60)
     print("请配置你的 Prometheus 地址")
     print()
-    #prometheus_url = input("Prometheus URL [http://localhost:9090]: ").strip() or "http://192.168.56.66:9090"
-    prometheus_url = 'http://192.168.56.66:9090'
+
+    # 从环境变量读取，如果没有则使用默认值
+    import os
+    default_url = os.environ.get('PROMETHEUS_URL', 'http://localhost:9090')
+    prometheus_url = input(f"Prometheus URL [{default_url}]: ").strip() or default_url
     try:
         # 初始化监控验证器
         checker = MonitorChecker(prometheus_url)

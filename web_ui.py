@@ -72,21 +72,38 @@ def load_scenarios():
     """加载故障场景配置"""
     scenarios_dir = "scenarios"
     scenarios = []
-    
+
     if os.path.exists(scenarios_dir):
         for filename in os.listdir(scenarios_dir):
             if filename.endswith('.yaml'):
+                # 安全检查：防止路径遍历攻击
+                if '..' in filename or '/' in filename or '\\' in filename:
+                    continue
+
                 filepath = os.path.join(scenarios_dir, filename)
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                    scenario = config.get('scenario', {})
-                    scenarios.append({
-                        'filename': filename,
-                        'name': scenario.get('name', filename),
-                        'description': scenario.get('description', ''),
-                        'type': scenario.get('type', 'unknown')
-                    })
-    
+
+                # 验证文件路径在预期目录内
+                abs_scenarios_dir = os.path.abspath(scenarios_dir)
+                abs_filepath = os.path.abspath(filepath)
+                if not abs_filepath.startswith(abs_scenarios_dir):
+                    continue
+
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        config = yaml.safe_load(f)
+                        if config and isinstance(config, dict):
+                            scenario = config.get('scenario', {})
+                            scenarios.append({
+                                'filename': filename,
+                                'name': scenario.get('name', filename),
+                                'description': scenario.get('description', ''),
+                                'type': scenario.get('type', 'unknown')
+                            })
+                except Exception as e:
+                    # 记录错误但继续加载其他场景
+                    st.warning(f"加载场景文件 {filename} 失败: {e}")
+                    continue
+
     return scenarios
 
 
@@ -114,6 +131,33 @@ def init_monitor_checker(prometheus_url, username=None, password=None):
             st.error(f"✗ 监控验证器初始化失败: {e}")
             return False
     return True
+
+
+def validate_input(input_str, field_name, max_length=253):
+    """
+    验证输入字符串
+
+    参数：
+        input_str: 输入字符串
+        field_name: 字段名称
+        max_length: 最大长度
+
+    返回：
+        tuple: (是否有效, 错误消息)
+    """
+    if not input_str or not input_str.strip():
+        return False, f"{field_name}不能为空"
+
+    # 检查长度
+    if len(input_str) > max_length:
+        return False, f"{field_name}长度不能超过 {max_length} 个字符"
+
+    # 检查 Kubernetes 资源名称规则（小写字母、数字、连字符）
+    import re
+    if not re.match(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$', input_str):
+        return False, f"{field_name}只能包含小写字母、数字和连字符，且必须以字母或数字开头和结尾"
+
+    return True, ""
 
 
 def page_home():
@@ -242,6 +286,22 @@ def page_fault_injection():
     
     with col2:
         if st.button("🚀 开始演练", use_container_width=True, type="primary"):
+            # 验证输入
+            if not pod_name or not pod_name.strip():
+                st.error("❌ Pod 名称不能为空")
+                return
+
+            # 验证 namespace
+            is_valid, error_msg = validate_input(namespace, "命名空间")
+            if not is_valid:
+                st.error(f"❌ {error_msg}")
+                return
+
+            # 验证 pod_name（Pod 名称可以包含更多字符）
+            if not pod_name.strip():
+                st.error("❌ Pod 名称不能为空")
+                return
+
             with st.spinner("正在执行演练..."):
                 start_time = datetime.now()
                 
@@ -256,18 +316,25 @@ def page_fault_injection():
                         result = st.session_state.chaos_injector.inject_cpu_stress(
                             namespace=namespace,
                             pod_name=pod_name,
+                            cpu_count=2,  # 默认使用 2 个 CPU 核心
+                            memory_size='100Mi',  # 默认压测 100Mi 内存
                             duration='60s'
                         )
                     elif scenario_type == 'network_delay':
                         result = st.session_state.chaos_injector.inject_network_delay(
                             namespace=namespace,
                             pod_name=pod_name,
+                            latency='100ms',  # 默认延迟 100ms
+                            jitter='10ms',    # 默认抖动 10ms
                             duration='60s'
                         )
                     elif scenario_type == 'disk_io':
                         result = st.session_state.chaos_injector.inject_disk_failure(
                             namespace=namespace,
                             pod_name=pod_name,
+                            path='/var/log',      # 默认路径
+                            fault_type='disk_fill',  # 默认故障类型：磁盘填充
+                            size='1Gi',           # 默认填充 1Gi
                             duration='60s'
                         )
                     else:
@@ -331,7 +398,9 @@ def page_monitoring():
     col1, col2 = st.columns(2)
     
     with col1:
-        prometheus_url = st.text_input("Prometheus URL", value="http://192.168.56.66:9090")
+        # 从环境变量读取默认值，如果没有则使用默认值
+        default_prometheus_url = os.environ.get('PROMETHEUS_URL', 'http://localhost:9090')
+        prometheus_url = st.text_input("Prometheus URL", value=default_prometheus_url)
     
     with col2:
         username = st.text_input("用户名", placeholder="可选")
@@ -409,31 +478,46 @@ def page_monitoring():
 def page_reports():
     """演练报告页面"""
     st.title("📄 演练报告")
-    
+
     # 报告列表
     reports_dir = "reports"
-    
+
     if os.path.exists(reports_dir):
         reports = [f for f in os.listdir(reports_dir) if f.endswith('.md')]
-        
+
         if reports:
             st.subheader("📋 报告列表")
-            
+
             for report in reports:
+                # 安全检查：防止路径遍历
+                if '..' in report or '/' in report or '\\' in report:
+                    continue
+
                 with st.expander(report):
                     filepath = os.path.join(reports_dir, report)
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    st.markdown(content)
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.download_button(
-                            label="📥 下载报告",
-                            data=content,
-                            file_name=report,
-                            mime="text/markdown"
-                        )
+
+                    # 验证文件路径在预期目录内
+                    abs_reports_dir = os.path.abspath(reports_dir)
+                    abs_filepath = os.path.abspath(filepath)
+                    if not abs_filepath.startswith(abs_reports_dir):
+                        st.error("无效的文件路径")
+                        continue
+
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        st.markdown(content)
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.download_button(
+                                label="📥 下载报告",
+                                data=content,
+                                file_name=report,
+                                mime="text/markdown"
+                            )
+                    except Exception as e:
+                        st.error(f"读取报告失败: {e}")
         else:
             st.info("暂无演练报告，请先执行演练")
     else:
