@@ -79,11 +79,12 @@ def load_scenarios():
                 filepath = os.path.join(scenarios_dir, filename)
                 with open(filepath, 'r', encoding='utf-8') as f:
                     config = yaml.safe_load(f)
+                    scenario = config.get('scenario', {})
                     scenarios.append({
                         'filename': filename,
-                        'name': config.get('name', filename),
-                        'description': config.get('description', ''),
-                        'type': config.get('type', 'unknown')
+                        'name': scenario.get('name', filename),
+                        'description': scenario.get('description', ''),
+                        'type': scenario.get('type', 'unknown')
                     })
     
     return scenarios
