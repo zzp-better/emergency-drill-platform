@@ -68,7 +68,17 @@ Chaos Mesh  Prometheus  Markdown
 pip install -r requirements.txt
 ```
 
-### 第一个故障注入示例
+### 方式一：Web UI（推荐）
+
+启动可视化界面：
+
+```bash
+streamlit run web_ui.py
+```
+
+然后在浏览器中访问 http://localhost:8501
+
+### 方式二：命令行
 
 ```bash
 # 运行 Pod 删除故障注入（原生 K8s）
@@ -76,11 +86,7 @@ python src/chaos_injector.py
 
 # 运行 Chaos Mesh 故障注入
 python examples/chaos_mesh_drill.py
-```
 
-### 监控验证示例
-
-```bash
 # 验证 Prometheus 告警
 python src/monitor_checker.py
 ```
@@ -90,6 +96,7 @@ python src/monitor_checker.py
 ```
 emergency-drill-platform/
 ├── README.md                   # 项目说明
+├── web_ui.py                  # Web UI 界面（Streamlit）
 ├── requirements.txt            # Python 依赖
 ├── src/                        # 源代码
 │   ├── chaos_injector.py      # 故障注入模块（支持原生 K8s 和 Chaos Mesh）
@@ -101,6 +108,7 @@ emergency-drill-platform/
 │   ├── network_delay.yaml     # 网络延迟场景
 │   └── disk_io.yaml           # 磁盘 IO 故障场景
 ├── docs/                       # 文档
+│   └── web_ui_guide.md       # Web UI 使用指南
 ├── tests/                      # 测试代码
 └── examples/                   # 示例代码
     ├── complete_drill.py       # 完整演练流程示例
@@ -133,7 +141,7 @@ emergency-drill-platform/
 - [x] 实现监控告警验证
 - [x] 实现报告自动生成（基础版）
 - [x] 集成 Chaos Mesh（CPU 压测、网络故障、磁盘 IO 故障）
-- [ ] 开发 Web UI
+- [x] 开发 Web UI
 - [ ] 容器化部署
 - [ ] Helm Chart 打包
 

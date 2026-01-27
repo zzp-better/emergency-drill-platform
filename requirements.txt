@@ -22,8 +22,9 @@ python-dateutil>=2.8.2
 # markdown>=3.5.1
 # weasyprint>=60.1
 
-# Web UI（后续开发）
-# streamlit>=1.29.0
+# Web UI
+streamlit>=1.29.0
+pandas>=2.0.0
 
 # 测试框架
 pytest>=7.4.3
