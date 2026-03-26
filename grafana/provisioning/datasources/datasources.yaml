@@ -1,0 +1,31 @@
+# Grafana 数据源配置
+# 用于自动配置 Prometheus 数据源
+
+apiVersion: 1
+
+datasources:
+  # Prometheus 数据源
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: "2.45.0"
+    version: 1
+
+  # Pushgateway 数据源（用于接收演练指标）
+  - name: Pushgateway
+    type: prometheus
+    access: proxy
+    url: http://pushgateway:9091
+    isDefault: false
+    editable: true
+    jsonData:
+      httpMethod: POST
+      prometheusType: Prometheus
+    version: 1

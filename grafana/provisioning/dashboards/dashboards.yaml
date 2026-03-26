@@ -1,0 +1,17 @@
+# Grafana Dashboard 配置
+# 用于自动导入 EDAP 仪表板
+
+apiVersion: 1
+
+providers:
+  - name: 'EDAP Dashboards'
+    orgId: 1
+    folder: 'EDAP'
+    folderUid: 'edap-folder'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

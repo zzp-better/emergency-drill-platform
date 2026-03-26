@@ -20,11 +20,15 @@ from kubernetes.client.rest import ApiException
 
 # 导入 Chaos Mesh 注入器
 try:
-    from chaos_mesh_injector import ChaosMeshInjector
+    from src.chaos_mesh_injector import ChaosMeshInjector
     CHAOS_MESH_AVAILABLE = True
 except ImportError:
-    CHAOS_MESH_AVAILABLE = False
-    logging.warning("Chaos Mesh 注入器未安装，仅支持原生 Kubernetes 故障注入")
+    try:
+        from chaos_mesh_injector import ChaosMeshInjector
+        CHAOS_MESH_AVAILABLE = True
+    except ImportError:
+        CHAOS_MESH_AVAILABLE = False
+        logging.warning("Chaos Mesh 注入器未安装，仅支持原生 Kubernetes 故障注入")
 
 # 配置日志
 logging.basicConfig(
@@ -37,21 +41,45 @@ logger = logging.getLogger(__name__)
 class ChaosInjector:
     """故障注入器 - 统一接口，支持原生 K8s 和 Chaos Mesh"""
 
-    def __init__(self, use_chaos_mesh: bool = False):
+    def __init__(self, use_chaos_mesh: bool = False, kubeconfig_path: str = None,
+                 cluster_api_server: str = None, cluster_token: str = None,
+                 cluster_ca_cert: str = None):
         """
         初始化故障注入器
 
         参数：
             use_chaos_mesh: 是否使用 Chaos Mesh（默认 False）
+            kubeconfig_path: kubeconfig 文件路径（可选，默认使用 ~/.kube/config）
+            cluster_api_server: 集群 API Server 地址（可选，用于直接连接）
+            cluster_token: 集群访问 Token（可选，用于直接连接）
+            cluster_ca_cert: 集群 CA 证书内容（可选，用于直接连接）
         """
         self.use_chaos_mesh = use_chaos_mesh
+        self.kubeconfig_path = kubeconfig_path
+        self.cluster_api_server = cluster_api_server
+        self.cluster_info = {}
         
         try:
-            # 加载 kubeconfig 配置
-            config.load_kube_config()
-            self.v1 = client.CoreV1Api()
-            self.apps_v1 = client.AppsV1Api()
-            logger.info("✓ Kubernetes 客户端初始化成功")
+            # 根据参数选择连接方式
+            if cluster_api_server and cluster_token:
+                # 使用 Token 直接连接集群
+                self._connect_with_token(cluster_api_server, cluster_token, cluster_ca_cert)
+            elif kubeconfig_path:
+                # 使用指定的 kubeconfig 文件
+                config.load_kube_config(config_file=kubeconfig_path)
+                self.v1 = client.CoreV1Api()
+                self.apps_v1 = client.AppsV1Api()
+                logger.info(f"✓ Kubernetes 客户端初始化成功 (kubeconfig: {kubeconfig_path})")
+            else:
+                # 使用默认 kubeconfig
+                config.load_kube_config()
+                self.v1 = client.CoreV1Api()
+                self.apps_v1 = client.AppsV1Api()
+                logger.info("✓ Kubernetes 客户端初始化成功 (默认 kubeconfig)")
+            
+            # 获取集群信息
+            self._get_cluster_info()
+            
         except Exception as e:
             logger.error(f"✗ Kubernetes 客户端初始化失败: {e}")
             raise
@@ -60,7 +88,12 @@ class ChaosInjector:
         if use_chaos_mesh:
             if CHAOS_MESH_AVAILABLE:
                 try:
-                    self.chaos_mesh = ChaosMeshInjector()
+                    self.chaos_mesh = ChaosMeshInjector(
+                        kubeconfig_path=kubeconfig_path,
+                        cluster_api_server=cluster_api_server,
+                        cluster_token=cluster_token,
+                        cluster_ca_cert=cluster_ca_cert
+                    )
                     logger.info("✓ Chaos Mesh 注入器初始化成功")
                 except Exception as e:
                     logger.error(f"✗ Chaos Mesh 注入器初始化失败: {e}")
@@ -69,6 +102,177 @@ class ChaosInjector:
             else:
                 logger.warning("Chaos Mesh 注入器不可用，将使用原生 Kubernetes 故障注入")
                 self.use_chaos_mesh = False
+
+    def _connect_with_token(self, api_server: str, token: str, ca_cert: str = None):
+        """使用 Token 连接集群"""
+        import ssl
+        import urllib3
+        from kubernetes.client import Configuration, ApiClient
+
+        # 去除末尾斜杠，避免路径拼接出现 //version/ 等双斜杠
+        api_server = api_server.rstrip('/')
+
+        # 禁用 SSL 警告
+        urllib3.disable_warnings()
+
+        # 优先尝试注入 PyOpenSSL（解决 macOS OpenSSL 3.x / LibreSSL 兼容问题）
+        _pyopenssl_ok = False
+        try:
+            import urllib3.contrib.pyopenssl
+            urllib3.contrib.pyopenssl.inject_into_urllib3()
+            _pyopenssl_ok = True
+            logger.info("✓ 已启用 PyOpenSSL SSL 后端")
+        except ImportError:
+            pass
+
+        configuration = Configuration()
+        configuration.host = api_server
+        configuration.api_key = {"authorization": "Bearer " + token}
+        configuration.verify_ssl = False
+        configuration.ssl_ca_cert = None
+
+        if ca_cert:
+            import tempfile
+            ca_cert_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.crt')
+            ca_cert_file.write(ca_cert)
+            ca_cert_file.close()
+            configuration.ssl_ca_cert = ca_cert_file.name
+            configuration.verify_ssl = True
+        else:
+            configuration.assert_hostname = False
+
+        api_client = ApiClient(configuration)
+
+        # PyOpenSSL 不可用时，注入自定义 SSL 上下文
+        # OP_LEGACY_SERVER_CONNECT 是 Python 3.12 专门为兼容旧版 TLS 服务器引入的标志
+        if not ca_cert and not _pyopenssl_ok:
+            try:
+                ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode = ssl.CERT_NONE
+                ssl_ctx.options |= ssl.OP_ALL
+                if hasattr(ssl, 'OP_LEGACY_SERVER_CONNECT'):
+                    ssl_ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+                api_client.rest_client.pool_manager = urllib3.PoolManager(
+                    num_pools=4,
+                    maxsize=4,
+                    ssl_context=ssl_ctx,
+                )
+                logger.info("✓ 已注入自定义 SSL 上下文（含 OP_LEGACY_SERVER_CONNECT）")
+            except Exception as e:
+                logger.warning(f"自定义 SSL 上下文注入失败: {e}")
+
+        self.v1 = client.CoreV1Api(api_client)
+        self.apps_v1 = client.AppsV1Api(api_client)
+        logger.info(f"✓ 使用 Token 连接集群成功: {api_server}")
+
+    def _get_cluster_info(self):
+        """获取集群基本信息（各项独立获取，互不影响）"""
+        # 获取集群名称/上下文
+        if self.cluster_api_server:
+            self.cluster_info['context'] = 'token-connection'
+            self.cluster_info['cluster'] = self.cluster_api_server
+            self.cluster_info['cluster_name'] = self.cluster_api_server
+        else:
+            try:
+                from kubernetes import config as k8s_config
+                contexts = k8s_config.list_kube_config_contexts()
+                if contexts:
+                    current_context = contexts[1] if len(contexts) > 1 else contexts[0]
+                    self.cluster_info['context'] = current_context.get('name', 'unknown')
+                    self.cluster_info['cluster'] = current_context.get('context', {}).get('cluster', 'unknown')
+                    self.cluster_info['cluster_name'] = current_context.get('name', 'unknown')
+            except Exception:
+                self.cluster_info['context'] = 'unknown'
+                self.cluster_info['cluster'] = 'unknown'
+                self.cluster_info['cluster_name'] = 'unknown'
+
+        errors = {}
+
+        # 获取 Kubernetes 版本
+        try:
+            version_info = client.VersionApi(self.v1.api_client).get_code()
+            self.cluster_info['kubernetes_version'] = f"{version_info.major}.{version_info.minor}"
+        except Exception as e:
+            logger.warning(f"获取 Kubernetes 版本失败: {e}")
+            self.cluster_info['kubernetes_version'] = 'unknown'
+            errors['kubernetes_version'] = str(e)
+
+        # 获取节点数量
+        try:
+            nodes = self.v1.list_node()
+            self.cluster_info['node_count'] = len(nodes.items)
+        except Exception as e:
+            logger.warning(f"获取节点列表失败: {e}")
+            self.cluster_info['node_count'] = 'unknown'
+            errors['node_count'] = str(e)
+
+        # 获取命名空间列表
+        try:
+            namespaces = self.v1.list_namespace()
+            self.cluster_info['namespaces'] = [ns.metadata.name for ns in namespaces.items]
+            logger.info(f"✓ 集群信息: 节点数 {self.cluster_info.get('node_count')}, {len(self.cluster_info['namespaces'])} 命名空间")
+        except Exception as e:
+            logger.warning(f"获取命名空间列表失败: {e}")
+            self.cluster_info['namespaces'] = []
+            errors['namespaces'] = str(e)
+
+        if errors:
+            self.cluster_info['_errors'] = errors
+
+    def get_cluster_info(self) -> Dict:
+        """返回集群信息"""
+        return self.cluster_info
+
+    def list_namespaces(self) -> list:
+        """获取所有命名空间"""
+        cached = self.cluster_info.get('namespaces')
+        if cached:
+            return cached
+        # 缓存为空时实时获取
+        try:
+            namespaces = self.v1.list_namespace()
+            ns_list = [ns.metadata.name for ns in namespaces.items]
+            self.cluster_info['namespaces'] = ns_list
+            return ns_list
+        except Exception as e:
+            logger.error(f"获取命名空间失败: {e}")
+            return []
+
+    def list_deployments(self, namespace: str) -> list:
+        """获取指定命名空间的所有 Deployment"""
+        try:
+            deployments = self.apps_v1.list_namespaced_deployment(namespace)
+            deploy_list = []
+            for deploy in deployments.items:
+                deploy_list.append({
+                    'name': deploy.metadata.name,
+                    'namespace': deploy.metadata.namespace,
+                    'replicas': deploy.spec.replicas,
+                    'available_replicas': deploy.status.available_replicas or 0,
+                    'labels': deploy.metadata.labels or {}
+                })
+            return deploy_list
+        except ApiException as e:
+            logger.error(f"获取 Deployment 列表失败: {e}")
+            return []
+
+    def test_connection(self) -> Dict:
+        """测试集群连接"""
+        result = {
+            'success': False,
+            'message': '',
+            'cluster_info': {}
+        }
+        try:
+            # 测试 API 连接
+            version = self.v1.get_api_resources()
+            result['success'] = True
+            result['message'] = '连接成功'
+            result['cluster_info'] = self.cluster_info
+        except Exception as e:
+            result['message'] = f'连接失败: {str(e)}'
+        return result
 
     def delete_pod(self, namespace, pod_name):
         """
@@ -210,9 +414,12 @@ class ChaosInjector:
             logger.error(f"获取 Pod 列表失败: {e}")
             return []
 
-    def inject_cpu_stress(self, namespace: str, pod_name: str, 
+    def inject_cpu_stress(self, namespace: str, pod_name: str,
                          cpu_count: Optional[int] = None,
+                         cpu_workers: Optional[int] = None,
+                         cpu_load: Optional[int] = None,
                          memory_size: Optional[str] = None,
+                         memory_workers: Optional[int] = None,
                          duration: str = "60s") -> Dict:
         """
         注入 CPU/内存压测故障
@@ -220,8 +427,11 @@ class ChaosInjector:
         参数：
             namespace: 命名空间
             pod_name: 目标 Pod 名称
-            cpu_count: CPU 核心数
+            cpu_count: CPU 核心数（已废弃，建议使用 cpu_workers）
+            cpu_workers: CPU 压测 workers 数量（默认 1）
+            cpu_load: 每个 CPU worker 的负载百分比（1-100，默认 100）
             memory_size: 内存大小（如 100Mi, 1Gi，会自动转换为字节数）
+            memory_workers: 内存压测 workers 数量（默认 1）
             duration: 持续时间
 
         返回：
@@ -235,31 +445,49 @@ class ChaosInjector:
                 "message": "CPU 压测需要 Chaos Mesh"
             }
 
-        # 修复内存大小格式：Chaos Mesh StressChaos 期望的字节格式（不带单位）
-        if memory_size:
-            # 支持的输入格式：100Mi, 100mi, 100MB, 100mb, 100, 104857600
-            memory_size = memory_size.lower()
-            
-            # 转换为字节数
-            if memory_size.endswith('mi') or memory_size.endswith('mb'):
-                # Mebibyte/Megabyte -> 字节 (1 Mi = 1024 * 1024 = 1048576 bytes)
-                num = int(memory_size[:-2])
-                memory_size = str(num * 1024 * 1024)
-            elif memory_size.endswith('gi') or memory_size.endswith('gb'):
-                # Gibibyte/Gigabyte -> 字节 (1 Gi = 1024 * 1024 * 1024 = 1073741824 bytes)
-                num = int(memory_size[:-2])
-                memory_size = str(num * 1024 * 1024 * 1024)
-            elif memory_size.endswith('ki') or memory_size.endswith('kb'):
-                # Kibibyte/Kilobyte -> 字节 (1 Ki = 1024 bytes)
-                num = int(memory_size[:-2])
-                memory_size = str(num * 1024)
-            # 如果是纯数字，假设已经是字节数
-
         return self.chaos_mesh.create_stress_chaos(
             namespace=namespace,
             pod_name=pod_name,
             cpu_count=cpu_count,
+            cpu_workers=cpu_workers,
+            cpu_load=cpu_load,
             memory_size=memory_size,
+            memory_workers=memory_workers,
+            duration=duration
+        )
+
+    def inject_memory_stress(self, namespace: str, pod_name: str,
+                            memory_size: str = "256Mi",
+                            memory_workers: Optional[int] = None,
+                            duration: str = "60s") -> Dict:
+        """
+        注入内存压力故障
+
+        参数：
+            namespace: 命名空间
+            pod_name: 目标 Pod 名称
+            memory_size: 内存大小（如 256Mi, 512Mi, 1Gi）
+            memory_workers: 内存压测 workers 数量（默认 1）
+            duration: 持续时间
+
+        返回：
+            dict: 故障注入结果
+        """
+        if not self.use_chaos_mesh:
+            logger.error("内存压测需要 Chaos Mesh，请初始化时设置 use_chaos_mesh=True")
+            return {
+                "scenario": "memory_stress",
+                "success": False,
+                "message": "内存压测需要 Chaos Mesh"
+            }
+
+        return self.chaos_mesh.create_stress_chaos(
+            namespace=namespace,
+            pod_name=pod_name,
+            cpu_count=None,
+            cpu_workers=None,
+            memory_size=memory_size,
+            memory_workers=memory_workers,
             duration=duration
         )
 

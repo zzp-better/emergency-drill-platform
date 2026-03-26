@@ -11,6 +11,7 @@ Chaos Mesh 故障注入模块 - Chaos Mesh Injector
 """
 
 import time
+import re
 import logging
 import yaml
 from datetime import datetime
@@ -26,24 +27,92 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _safe_chaos_name(prefix: str, pod_name: str) -> str:
+    """
+    生成符合 RFC 1123 subdomain 规范的 Chaos 资源名称。
+    规则：只含小写字母、数字、'-'，以字母/数字开头和结尾，总长 ≤ 63。
+    """
+    # 净化 pod_name：去空格、转小写、非法字符换成 '-'
+    safe = re.sub(r'[^a-z0-9-]', '-', pod_name.strip().lower())
+    safe = re.sub(r'-+', '-', safe).strip('-')  # 合并连续 '-' 并去首尾
+    # 时间戳取绝对值（防负数），截取后 8 位保证短小
+    ts = str(abs(int(time.time())))[-8:]
+    # 拼合并截断到 63 字符
+    name = f"{prefix}-{safe}-{ts}"[:63].rstrip('-')
+    return name
+
+
 class ChaosMeshInjector:
     """Chaos Mesh 故障注入器"""
 
-    def __init__(self):
-        """初始化 Kubernetes 客户端"""
+    def __init__(self, kubeconfig_path: str = None,
+                 cluster_api_server: str = None,
+                 cluster_token: str = None,
+                 cluster_ca_cert: str = None):
+        """
+        初始化 Kubernetes 客户端
+        
+        参数：
+            kubeconfig_path: kubeconfig 文件路径（可选）
+            cluster_api_server: 集群 API Server 地址（可选，用于 Token 连接）
+            cluster_token: 集群访问 Token（可选，用于 Token 连接）
+            cluster_ca_cert: 集群 CA 证书内容（可选，用于 Token 连接）
+        """
         try:
-            # 加载 kubeconfig 配置
-            config.load_kube_config()
-            self.v1 = client.CoreV1Api()
-            self.custom_api = client.CustomObjectsApi()
-            logger.info("✓ Chaos Mesh 客户端初始化成功")
+            # 根据参数选择连接方式
+            if cluster_api_server and cluster_token:
+                # 使用 Token 直接连接集群
+                self._connect_with_token(cluster_api_server, cluster_token, cluster_ca_cert)
+            elif kubeconfig_path:
+                # 使用指定的 kubeconfig 文件
+                config.load_kube_config(config_file=kubeconfig_path)
+                self.v1 = client.CoreV1Api()
+                self.custom_api = client.CustomObjectsApi()
+                logger.info(f"✓ Chaos Mesh 客户端初始化成功 (kubeconfig: {kubeconfig_path})")
+            else:
+                # 使用默认 kubeconfig
+                config.load_kube_config()
+                self.v1 = client.CoreV1Api()
+                self.custom_api = client.CustomObjectsApi()
+                logger.info("✓ Chaos Mesh 客户端初始化成功 (默认 kubeconfig)")
         except Exception as e:
             logger.error(f"✗ Chaos Mesh 客户端初始化失败: {e}")
             raise
+    
+    def _connect_with_token(self, api_server: str, token: str, ca_cert: str = None):
+        """使用 Token 连接集群"""
+        from kubernetes.client import Configuration, ApiClient
+        
+        configuration = Configuration()
+        configuration.host = api_server
+        configuration.api_key = {"authorization": "Bearer " + token}
+        configuration.verify_ssl = False  # 默认不验证 SSL（用于自签名证书）
+        
+        if ca_cert:
+            # 使用提供的 CA 证书
+            import tempfile
+            ca_cert_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.crt')
+            ca_cert_file.write(ca_cert)
+            ca_cert_file.close()
+            configuration.ssl_ca_cert = ca_cert_file.name
+        else:
+            # 如果没有 CA 证书，禁用 SSL 魏证（不安全）
+            configuration.verify_ssl = False
+            configuration.ssl_ca_cert = None
+            # 禁用主机名验证
+            configuration.assert_hostname = False
+        
+        api_client = ApiClient(configuration)
+        self.v1 = client.CoreV1Api(api_client)
+        self.custom_api = client.CustomObjectsApi(api_client)
+        logger.info(f"✓ 使用 Token 连接集群成功: {api_server}")
 
     def create_stress_chaos(self, namespace: str, pod_name: str,
                           cpu_count: Optional[int] = None,
+                          cpu_workers: Optional[int] = None,
+                          cpu_load: Optional[int] = None,
                           memory_size: Optional[str] = None,
+                          memory_workers: Optional[int] = None,
                           duration: str = "60s") -> Dict:
         """
         创建 CPU/内存压测故障
@@ -51,15 +120,18 @@ class ChaosMeshInjector:
         参数：
             namespace: 命名空间
             pod_name: 目标 Pod 名称
-            cpu_count: CPU 核心数（如 2）
+            cpu_count: CPU 核心数（如 2），已废弃，建议使用 cpu_workers
+            cpu_workers: CPU 压测 workers 数量（默认 1）
+            cpu_load: 每个 CPU worker 的负载百分比（1-100，默认 100）
             memory_size: 内存大小（如 100Mi, 1Gi，会自动转换为字节数）
+            memory_workers: 内存压测 workers 数量（默认 1）
             duration: 持续时间（如 60s, 5m）
 
         返回：
             dict: 故障注入结果
         """
         # 验证至少有一个 stressor
-        if not cpu_count and not memory_size:
+        if not cpu_count and not cpu_workers and not memory_size:
             return {
                 "chaos_type": "stress",
                 "chaos_name": None,
@@ -69,26 +141,38 @@ class ChaosMeshInjector:
                 "message": "至少需要指定 cpu_count 或 memory_size 其中一个参数"
             }
 
-        chaos_name = f"stress-{pod_name}-{int(time.time())}"
+        chaos_name = _safe_chaos_name("stress", pod_name)
 
-        spec = {
-            "mode": "one",
-            "selector": {
-                "namespaces": [namespace],
-                "pods": {
-                    namespace: [pod_name]
+        # 获取 Pod 的第一个容器名称（StressChaos 需要指定容器）
+        try:
+            pod = self.v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+            container_names = [c.name for c in pod.spec.containers]
+            if not container_names:
+                return {
+                    "chaos_type": "stress",
+                    "chaos_name": None,
+                    "namespace": namespace,
+                    "inject_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "success": False,
+                    "message": f"Pod {pod_name} 没有找到任何容器"
                 }
-            },
-            "duration": duration,
-            "stressors": {}
-        }
-
-        if cpu_count:
-            spec["stressors"]["cpu"] = {
-                "workers": cpu_count,
-                "load": 100
+            target_container = container_names[0]
+            logger.info(f"目标容器: {target_container}")
+        except Exception as e:
+            logger.error(f"获取 Pod 容器信息失败: {e}")
+            return {
+                "chaos_type": "stress",
+                "chaos_name": None,
+                "namespace": namespace,
+                "inject_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "success": False,
+                "message": f"获取 Pod 容器信息失败: {e}"
             }
 
+        # 构建内存压测配置（Chaos Mesh 2.x 格式）
+        # 注意：Chaos Mesh 2.x 使用 stressors.memory 和 stressors.cpu 结构
+        stressors = {}
+        
         if memory_size:
             # Chaos Mesh StressChaos 期望的字节格式（不带单位）
             # 支持的输入格式：100Mi, 100mi, 100MB, 100mb, 100, 104857600
@@ -109,10 +193,34 @@ class ChaosMeshInjector:
                 memory_size = str(num * 1024)
             # 如果是纯数字，假设已经是字节数
             
-            spec["stressors"]["memory"] = {
-                "workers": 1,
+            # 使用 memory_workers 参数，默认为 1
+            mem_workers = memory_workers if memory_workers else 1
+            stressors["memory"] = {
+                "container_names": [target_container],
+                "workers": mem_workers,
                 "size": memory_size
             }
+
+        if cpu_count or cpu_workers:
+            # 使用 cpu_workers 参数，如果未指定则使用 cpu_count（兼容旧参数），默认为 1
+            cpu_w = cpu_workers if cpu_workers else (cpu_count if cpu_count else 1)
+            stressors["cpu"] = {
+                "container_names": [target_container],
+                "workers": cpu_w,
+                "load": cpu_load if cpu_load is not None else 100
+            }
+
+        spec = {
+            "mode": "one",
+            "selector": {
+                "namespaces": [namespace],
+                "pods": {
+                    namespace: [pod_name]
+                }
+            },
+            "duration": duration,
+            "stressors": stressors
+        }
 
         result = self._create_chaos(
             group="chaos-mesh.org",
@@ -143,7 +251,7 @@ class ChaosMeshInjector:
         返回：
             dict: 故障注入结果
         """
-        chaos_name = f"network-delay-{pod_name}-{int(time.time())}"
+        chaos_name = _safe_chaos_name("network-delay", pod_name)
 
         spec = {
             "mode": "one",
@@ -190,7 +298,7 @@ class ChaosMeshInjector:
         返回：
             dict: 故障注入结果
         """
-        chaos_name = f"network-loss-{pod_name}-{int(time.time())}"
+        chaos_name = _safe_chaos_name("network-loss", pod_name)
 
         spec = {
             "mode": "one",
@@ -239,7 +347,7 @@ class ChaosMeshInjector:
         返回：
             dict: 故障注入结果
         """
-        chaos_name = f"io-{pod_name}-{int(time.time())}"
+        chaos_name = _safe_chaos_name("io", pod_name)
 
         spec = {
             "mode": "one",
@@ -287,7 +395,7 @@ class ChaosMeshInjector:
         返回：
             dict: 故障注入结果
         """
-        chaos_name = f"pod-kill-{pod_name}-{int(time.time())}"
+        chaos_name = _safe_chaos_name("pod-kill", pod_name)
 
         spec = {
             "mode": "one",

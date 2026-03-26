@@ -111,6 +111,35 @@ class PrometheusClient:
             logger.error(f"✗ PromQL 查询失败: {e}")
             return {}
 
+    def query_range(self, query: str, start: float, end: float, step: str = "60s") -> List[Dict]:
+        """
+        执行 PromQL 范围查询，返回时序趋势数据
+
+        参数：
+            query: PromQL 查询语句
+            start: 开始时间（Unix 时间戳）
+            end:   结束时间（Unix 时间戳）
+            step:  步长，如 '15s', '60s', '5m'
+
+        返回：
+            list: [{metric: {标签}, values: [[时间戳, 值], ...]}]
+        """
+        try:
+            api_url = f"{self.url}/api/v1/query_range"
+            params = {'query': query, 'start': start, 'end': end, 'step': step}
+            response = requests.get(api_url, params=params, auth=self.auth, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+            if data['status'] == 'success':
+                return data['data'].get('result', [])
+            logger.error(f"✗ PromQL 范围查询失败: {data}")
+            return []
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"✗ PromQL 范围查询失败: {e}")
+            return []
+
 
 class MonitorChecker:
     """监控验证器"""

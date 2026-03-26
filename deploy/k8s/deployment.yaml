@@ -1,0 +1,105 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: emergency-drill
+  labels:
+    name: emergency-drill
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edp-config
+  namespace: emergency-drill
+data:
+  PROMETHEUS_URL: "http://prometheus:9090"
+  PUSHGATEWAY_URL: "http://pushgateway:9091"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: edp-data
+  namespace: emergency-drill
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emergency-drill-platform
+  namespace: emergency-drill
+  labels:
+    app: edp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edp
+  template:
+    metadata:
+      labels:
+        app: edp
+    spec:
+      serviceAccountName: edp-sa
+      containers:
+      - name: app
+        image: emergency-drill-platform:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8501
+          name: http
+        envFrom:
+        - configMapRef:
+            name: edp-config
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+        - name: reports
+          mountPath: /app/reports
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: edp-data
+      - name: reports
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: emergency-drill-platform
+  namespace: emergency-drill
+spec:
+  type: ClusterIP
+  selector:
+    app: edp
+  ports:
+  - port: 8501
+    targetPort: 8501
+    name: http

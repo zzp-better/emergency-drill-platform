@@ -1,0 +1,119 @@
+services:
+  # ────────────────────────────────────────────────
+  # 应急演练智能平台（主应用）
+  # ────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: emergency-drill-platform:latest
+    container_name: edp-app
+    ports:
+      - "${APP_PORT:-8501}:8501"
+    environment:
+      # Kubernetes 连接（挂载 kubeconfig 后无需填写下方两项）
+      - KUBECONFIG=/app/.kube/config
+      # Prometheus 连接
+      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
+      # Pushgateway（演练指标上报）
+      - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-http://pushgateway:9091}
+      # Grafana（可选）
+      - GRAFANA_URL=${GRAFANA_URL:-http://grafana:3000}
+    volumes:
+      # kubeconfig（挂载宿主机的 k8s 连接配置）
+      - ${KUBECONFIG_PATH:-~/.kube}:/app/.kube:ro
+      # 持久化数据库和演练报告
+      - edp-data:/app/data
+      - edp-reports:/app/reports
+    restart: unless-stopped
+    networks:
+      - edp-net
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ────────────────────────────────────────────────
+  # Prometheus（监控数据源）
+  # ────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: edp-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - edp-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ────────────────────────────────────────────────
+  # Pushgateway（演练指标上报）
+  # ────────────────────────────────────────────────
+  pushgateway:
+    image: prom/pushgateway:v1.7.0
+    container_name: edp-pushgateway
+    ports:
+      - "${PUSHGATEWAY_PORT:-9091}:9091"
+    restart: unless-stopped
+    networks:
+      - edp-net
+
+  # ────────────────────────────────────────────────
+  # Grafana（可视化面板，可选）
+  # ────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: edp-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    restart: unless-stopped
+    networks:
+      - edp-net
+    depends_on:
+      - prometheus
+
+# ────────────────────────────────────────────────
+# 持久化存储
+# ────────────────────────────────────────────────
+volumes:
+  edp-data:
+    name: edp-data
+  edp-reports:
+    name: edp-reports
+  prometheus-data:
+    name: edp-prometheus-data
+  grafana-data:
+    name: edp-grafana-data
+
+# ────────────────────────────────────────────────
+# 网络
+# ────────────────────────────────────────────────
+networks:
+  edp-net:
+    name: edp-network
+    driver: bridge

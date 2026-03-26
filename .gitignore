@@ -42,6 +42,7 @@ reports/
 .pytest_cache/
 .coverage
 htmlcov/
+data/
 
 # Kubernetes
 *.kubeconfig

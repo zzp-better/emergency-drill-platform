@@ -2,6 +2,7 @@
 
 # Kubernetes 客户端
 kubernetes>=28.1.0
+pyopenssl>=23.0.0
 
 # HTTP 请求（用于调用 Prometheus API）
 requests>=2.31.0
@@ -25,6 +26,7 @@ python-dateutil>=2.8.2
 # Web UI
 streamlit>=1.29.0
 pandas>=2.0.0
+apscheduler>=3.10.0
 
 # 测试框架
 pytest>=7.4.3

@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.env
+
+# 数据与报告（运行时生成，不打包进镜像）
+data/
+reports/
+
+# 测试与覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.xml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# 文档
+*.md
+docs/
+
+# CI
+.github/
+.pre-commit-config.yaml
+
+# 临时文件
+*.log
+*.tmp
+tempCodeRunnerFile.py

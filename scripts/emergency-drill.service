@@ -1,0 +1,54 @@
+[Unit]
+Description=Emergency Drill Automation Platform - 应急演练自动化平台
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+# 服务类型：simple 表示 ExecStart 启动的进程就是服务的主进程
+Type=simple
+
+# 工作目录 - 修改为实际部署路径
+WorkingDirectory=/emergency-drill-platform
+
+# 环境变量配置
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="STREAMLIT_SERVER_PORT=8501"
+Environment="STREAMLIT_SERVER_ADDRESS=0.0.0.0"
+# Kubernetes 配置文件路径（如需要）
+# Environment="KUBECONFIG=/home/chaos/.kube/config"
+
+# 启动命令
+ExecStart=/usr/local/bin/streamlit run web_ui.py \
+    --server.port=8501 \
+    --server.address=0.0.0.0 \
+    --server.headless=true \
+    --browser.gatherUsageStats=false
+
+# 停止命令 - 发送 SIGTERM 信号优雅关闭
+ExecStop=/bin/kill -s TERM $MAINPID
+
+# 重启策略：服务异常退出时自动重启
+Restart=on-failure
+RestartSec=10s
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+
+# 日志配置 - 输出到 systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=emergency-drill
+
+# 优雅关闭超时设置
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
