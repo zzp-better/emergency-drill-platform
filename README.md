@@ -19,7 +19,9 @@
 - ✅ **Chaos Mesh 集成**：通过 Chaos Mesh 实现丰富的故障注入场景
 - ✅ **监控验证**：自动验证 Prometheus 告警是否按预期触发
 - ✅ **预案验证**：自动生成应急演练报告，验证预案有效性
-- ✅ **简单易用**：支持配置文件驱动，无需复杂配置
+- ✅ **故障链编排**：支持多步骤故障链，实现复杂演练场景
+- ✅ **定时调度**：支持 Cron 表达式定时执行演练任务
+- ✅ **Web UI**：直观的可视化界面，操作简单
 - ✅ **云原生**：基于 Kubernetes 和 Chaos Mesh
 
 ## 技术架构
@@ -73,7 +75,7 @@ pip install -r requirements.txt
 启动可视化界面：
 
 ```bash
-streamlit run web_ui.py
+streamlit run app.py
 ```
 
 然后在浏览器中访问 http://localhost:8501
@@ -96,19 +98,34 @@ python src/monitor_checker.py
 ```
 emergency-drill-platform/
 ├── README.md                   # 项目说明
-├── web_ui.py                  # Web UI 界面（Streamlit）
+├── app.py                     # Web UI 入口（Streamlit）
 ├── requirements.txt            # Python 依赖
-├── src/                        # 源代码
+├── src/                        # 核心源代码
 │   ├── chaos_injector.py      # 故障注入模块（支持原生 K8s 和 Chaos Mesh）
 │   ├── chaos_mesh_injector.py # Chaos Mesh 故障注入模块
-│   └── monitor_checker.py     # 监控验证模块
+│   ├── monitor_checker.py     # 监控验证模块
+│   ├── scheduler.py           # 定时调度模块
+│   └── db.py                  # 数据库模块
+├── web_ui/                     # Web UI 模块化代码
+│   ├── pages/                 # 页面模块
+│   │   ├── home.py           # 首页
+│   │   ├── cluster_resources.py  # 集群资源
+│   │   ├── fault_injection.py    # 故障注入
+│   │   ├── chain_drill.py        # 故障链
+│   │   ├── reports.py            # 演练报告
+│   │   ├── settings.py           # 系统设置
+│   │   └── monitor.py            # 监控面板
+│   ├── config.py              # 配置常量
+│   ├── state.py               # 状态管理
+│   ├── utils.py               # 工具函数
+│   ├── drill_executor.py      # 演练执行器
+│   └── chain_executor.py      # 故障链执行器
 ├── scenarios/                  # 故障场景配置
 │   ├── pod_crash.yaml         # Pod 崩溃场景
 │   ├── cpu_stress.yaml        # CPU 压测场景
 │   ├── network_delay.yaml     # 网络延迟场景
 │   └── disk_io.yaml           # 磁盘 IO 故障场景
 ├── docs/                       # 文档
-│   └── web_ui_guide.md       # Web UI 使用指南
 ├── tests/                      # 测试代码
 └── examples/                   # 示例代码
     ├── complete_drill.py       # 完整演练流程示例
