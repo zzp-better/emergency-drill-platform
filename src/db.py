@@ -126,16 +126,16 @@ def _migrate_json():
             if history:
                 with _get_conn() as conn:
                     count = conn.execute('SELECT COUNT(*) FROM drill_history').fetchone()[0]
-                if count == 0:
-                    for entry in history:
-                        conn.execute(
-                            'INSERT INTO drill_history (time, scenario, status, duration, message) '
-                            'VALUES (?,?,?,?,?)',
-                            (entry.get('time', ''), entry.get('scenario', ''),
-                             entry.get('status', ''), entry.get('duration', 0),
-                             entry.get('message', ''))
-                        )
-                    conn.commit()
+                    if count == 0:
+                        for entry in history:
+                            conn.execute(
+                                'INSERT INTO drill_history (time, scenario, status, duration, message) '
+                                'VALUES (?,?,?,?,?)',
+                                (entry.get('time', ''), entry.get('scenario', ''),
+                                 entry.get('status', ''), entry.get('duration', 0),
+                                 entry.get('message', ''))
+                            )
+                        conn.commit()
         except Exception:
             pass
 
@@ -370,6 +370,56 @@ def delete_drill_schedule(name: str):
     with _get_conn() as conn:
         conn.execute('DELETE FROM drill_schedules WHERE name = ?', (name,))
         conn.commit()
+
+
+def update_schedule(name: str, enabled: int):
+    """更新演练计划的启用状态"""
+    with _get_conn() as conn:
+        conn.execute(
+            'UPDATE drill_schedules SET enabled = ? WHERE name = ?',
+            (enabled, name)
+        )
+        conn.commit()
+
+
+def save_notify_config(config: dict) -> bool:
+    """保存通知配置到数据库（使用 app_settings 键值表）"""
+    try:
+        with _get_conn() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
+                )
+            ''')
+            conn.execute('''
+                INSERT INTO app_settings (key, value) VALUES ('notify_config', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ''', (json.dumps(config, ensure_ascii=False),))
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def load_notify_config() -> Optional[dict]:
+    """从数据库加载通知配置"""
+    try:
+        with _get_conn() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
+                )
+            ''')
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = 'notify_config'"
+            ).fetchone()
+            if row:
+                return json.loads(row[0])
+    except Exception:
+        pass
+    return None
 
 
 def update_schedule_run_time(name: str, next_run: Optional[str], last_run: Optional[str] = None):

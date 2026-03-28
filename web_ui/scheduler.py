@@ -82,55 +82,57 @@ def reload_schedules_from_db(db_module):
             db_module.update_schedule_run_time(name, next_str)
 
 
-def run_scheduled_drill(schedule_name: str, schedule_cfg: dict, drill_executor_module, state_module, config_module):
+def run_scheduled_drill(schedule_name: str, schedule_cfg: dict):
     """APScheduler 回调：执行定时演练（无 st.* 调用）
-    
+
     Args:
         schedule_name: 计划名称
         schedule_cfg: 计划配置
-        drill_executor_module: 演练执行模块
-        state_module: 状态管理模块
-        config_module: 配置模块
     """
     import sys
     import os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-    
+
     import db as _db
     from chaos_injector import ChaosInjector
-    
+    from . import drill_executor as _drill_executor
+    from . import state as _state
+    from . import config as _config
+
     scenario_type = schedule_cfg.get('scenario', 'cpu_stress')
     namespace = schedule_cfg.get('namespace', 'default')
     pod_selector = schedule_cfg.get('pod_selector', '')
     params_extra = _json.loads(schedule_cfg.get('params_json', '{}'))
     duration = params_extra.get('duration', 60)
     duration_str = f'{duration}s'
-    
+
     try:
         k8s_profile = _db.get_default_k8s_profile()
         if not k8s_profile:
             return
-        
-        cfg = {
-            'connection_type': k8s_profile.get('connection_type', 'kubeconfig'),
-            'kubeconfig_path': k8s_profile.get('kubeconfig_path', ''),
-            'api_server': k8s_profile.get('api_server', ''),
-            'token': k8s_profile.get('token', ''),
-            'ca_cert': k8s_profile.get('ca_cert', ''),
-        }
-        injector = ChaosInjector(config=cfg)
+
+        conn_type = k8s_profile.get('connection_type', 'kubeconfig').lower()
+        if conn_type == 'token':
+            injector = ChaosInjector(
+                cluster_api_server=k8s_profile.get('api_server', ''),
+                cluster_token=k8s_profile.get('token', ''),
+                cluster_ca_cert=k8s_profile.get('ca_cert') or None,
+            )
+        else:
+            injector = ChaosInjector(
+                kubeconfig_path=k8s_profile.get('kubeconfig_path', ''),
+            )
         task_id = uuid.uuid4().hex[:8]
-        
-        state_module.set_drill_task(task_id, {
+
+        _state.set_drill_task(task_id, {
             'status': 'running',
             'elapsed': 0,
             'total': duration,
             'scenario_name': f'[定时] {schedule_name}',
         })
-        
-        scenario_map = config_module.SCENARIO_MAP
-        scenario = scenario_map.get(scenario_type, {'type': scenario_type, 'name': scenario_type})
-        
+
+        scenario = _config.SCENARIO_MAP.get(scenario_type, {'type': scenario_type, 'name': scenario_type})
+
         params = {
             'namespace': namespace,
             'pod_name': pod_selector,
@@ -140,11 +142,13 @@ def run_scheduled_drill(schedule_name: str, schedule_cfg: dict, drill_executor_m
             'check_interval': 5,
             **params_extra,
         }
-        
+
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         _db.update_schedule_run_time(schedule_name, None, last_run=now_str)
-        
-        drill_executor_module.run_drill_background(params, task_id, injector, {})
+
+        drill_tasks = _state.get_drill_tasks()
+        drill_tasks_lock = _state.get_drill_tasks_lock()
+        _drill_executor.run_drill_background(params, task_id, injector, {}, drill_tasks, drill_tasks_lock)
     except Exception:
         pass
     finally:

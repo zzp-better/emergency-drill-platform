@@ -78,7 +78,7 @@ def render():
                             _start_chain_execution(chain, injector, drill_tasks, drill_tasks_lock)
                     with btn_col2:
                         if st.button(f"🗑️ 删除", key=f"del_{chain['id']}", use_container_width=True):
-                            db.delete_drill_chain(chain['id'])
+                            db.delete_drill_chain(chain['name'])
                             st.rerun()
         else:
             st.info("暂无保存的故障链")

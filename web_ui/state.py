@@ -219,13 +219,3 @@ def get_drill_tasks() -> dict:
 def get_drill_tasks_lock() -> threading.Lock:
     """获取演练任务锁"""
     return _drill_tasks_lock
-
-
-def get_drill_tasks() -> dict:
-    """获取演练任务字典"""
-    return _drill_tasks
-
-
-def get_drill_tasks_lock() -> threading.Lock:
-    """获取演练任务锁"""
-    return _drill_tasks_lock

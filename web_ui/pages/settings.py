@@ -340,7 +340,7 @@ def _render_schedule_tab():
                     st.text(f"**上次执行**: {s.get('last_run', 'N/A')}")
                 with col3:
                     if st.button("▶️ 启用" if not s.get('enabled') else "⏸️ 禁用", key=f"toggle_{s['name']}", use_container_width=True):
-                        s['enabled'] = 0 if s['enabled'] else 0
+                        s['enabled'] = 0 if s['enabled'] else 1
                         db.update_schedule(s['name'], enabled=s['enabled'])
                         reload_schedules_from_db(db)
                         st.rerun()
@@ -373,14 +373,13 @@ def _render_schedule_tab():
         else:
             try:
                 schedule_data = {
-                    'name': schedule_name,
                     'cron_expr': cron_expr,
                     'scenario': scenario_type,
                     'namespace': namespace,
                     'pod_selector': pod_selector,
                     'enabled': 1,
                 }
-                db.save_drill_schedule(schedule_data)
+                db.save_drill_schedule(schedule_name, schedule_data)
                 reload_schedules_from_db(db)
                 st.success(f"✓ 计划「{schedule_name}」已添加")
                 st.rerun()

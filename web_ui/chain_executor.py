@@ -56,8 +56,9 @@ class ChainExecutor:
         
         elapsed = 0
         while elapsed < wait_sec:
-            time.sleep(min(2, wait_sec - elapsed))
-            elapsed += 2
+            step = min(2, wait_sec - elapsed)
+            time.sleep(step)
+            elapsed += step
             if self._check_stop(task_id):
                 self._log(task_id, '⛔ 用户中断等待阶段')
                 return False

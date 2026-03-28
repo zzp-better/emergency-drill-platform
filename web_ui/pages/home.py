@@ -58,28 +58,21 @@ def render():
     
     # 快速操作区域
     st.markdown("### 🚀 快速操作")
+    st.caption("请使用左侧导航栏切换页面")
     qa1, qa2, qa3, qa4 = st.columns(4)
-    
+
     with qa1:
-        if st.button("💥 故障注入", use_container_width=True):
-            st.session_state.page = "fault_injection"
-            st.rerun()
-    
+        st.info("💥 故障注入\n\n← 侧边栏「⚡ 故障注入」")
+
     with qa2:
-        if st.button("🔗 故障链演练", use_container_width=True):
-            st.session_state.page = "chain_drill"
-            st.rerun()
-    
+        st.info("🔗 故障链演练\n\n← 侧边栏「🔗 故障链」")
+
     with qa3:
-        if st.button("📊 演练报告", use_container_width=True):
-            st.session_state.page = "reports"
-            st.rerun()
-    
+        st.info("📊 演练报告\n\n← 侧边栏「📄 演练报告」")
+
     with qa4:
-        if st.button("⚙️ 系统设置", use_container_width=True):
-            st.session_state.page = "settings"
-            st.rerun()
-    
+        st.info("⚙️ 系统设置\n\n← 侧边栏「⚙️ 设置」")
+
     st.markdown("---")
     
     # 演练任务状态
