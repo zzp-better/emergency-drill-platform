@@ -43,97 +43,116 @@ def get_all_drill_tasks() -> dict:
 def get_running_tasks() -> list:
     """获取所有运行中的任务 ID"""
     with _drill_tasks_lock:
-        return [tid for tid, t in _drill_tasks.items() if t.get('status') == 'running']
+        return [tid for tid, t in _drill_tasks.items() if t.get("status") == "running"]
 
 
 def send_stop_signal(task_id: str) -> None:
     """发送停止信号给指定任务"""
     with _drill_tasks_lock:
         if task_id in _drill_tasks:
-            _drill_tasks[task_id]['stop_signal'] = True
+            _drill_tasks[task_id]["stop_signal"] = True
 
 
 def check_stop_signal(task_id: str) -> bool:
     """检查任务是否收到停止信号"""
     with _drill_tasks_lock:
         task = _drill_tasks.get(task_id)
-        return task.get('stop_signal', False) if task else False
+        return task.get("stop_signal", False) if task else False
 
 
 # ════════════════════════════════════════════════════
 # Session State 初始化
 # ════════════════════════════════════════════════════
 
+
 def init_session_state():
     """初始化 Streamlit Session State"""
     import sys
     import os
-    
+
     # 添加 src 目录到 Python 路径
-    src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
+    src_path = os.path.join(os.path.dirname(__file__), "..", "src")
     if src_path not in sys.path:
         sys.path.insert(0, src_path)
-    
+
     import db
-    from .config import DEFAULT_CLUSTER, DEFAULT_MONITOR, DEFAULT_GRAFANA, DEFAULT_NOTIFY
-    
-    if 'drill_history' not in st.session_state:
+    from .config import (
+        DEFAULT_CLUSTER,
+        DEFAULT_MONITOR,
+        DEFAULT_GRAFANA,
+        DEFAULT_NOTIFY,
+    )
+
+    if "drill_history" not in st.session_state:
         st.session_state.drill_history = db.load_drill_history()
 
-    if 'current_drill' not in st.session_state:
+    if "current_drill" not in st.session_state:
         st.session_state.current_drill = None
 
-    if 'chaos_injector' not in st.session_state:
+    if "chaos_injector" not in st.session_state:
         st.session_state.chaos_injector = None
 
-    if 'monitor_checker' not in st.session_state:
+    if "monitor_checker" not in st.session_state:
         st.session_state.monitor_checker = None
 
-    if 'cluster_config' not in st.session_state:
+    if "cluster_config" not in st.session_state:
         saved = db.get_default_k8s_profile()
         st.session_state.cluster_config = {**DEFAULT_CLUSTER, **(saved or {})}
+    if "_k8s_sel" not in st.session_state:
+        st.session_state._k8s_sel = st.session_state.cluster_config.get("name", "")
 
-    if 'monitor_config' not in st.session_state:
+    if "monitor_config" not in st.session_state:
         saved_mon = db.get_default_monitor_profile()
         st.session_state.monitor_config = {**DEFAULT_MONITOR, **(saved_mon or {})}
+    if "_mon_sel" not in st.session_state:
+        st.session_state._mon_sel = st.session_state.monitor_config.get("name", "")
 
-    if 'cluster_resources' not in st.session_state:
-        st.session_state.cluster_resources = {'namespaces': [], 'pods': [], 'deployments': []}
+    if "cluster_resources" not in st.session_state:
+        st.session_state.cluster_resources = {
+            "namespaces": [],
+            "pods": [],
+            "deployments": [],
+        }
 
-    if 'grafana_config' not in st.session_state:
+    if "grafana_config" not in st.session_state:
         st.session_state.grafana_config = {**DEFAULT_GRAFANA}
 
-    if 'grafana_integration' not in st.session_state:
+    if "grafana_integration" not in st.session_state:
         st.session_state.grafana_integration = None
 
-    if 'fi_pod_list' not in st.session_state:
+    if "fi_pod_list" not in st.session_state:
         st.session_state.fi_pod_list = []
 
-    if 'fi_pod_ns' not in st.session_state:
-        st.session_state.fi_pod_ns = ''
+    if "fi_pod_ns" not in st.session_state:
+        st.session_state.fi_pod_ns = ""
 
-    if 'notify_config' not in st.session_state:
-        st.session_state.notify_config = DEFAULT_NOTIFY.copy()
+    if "notify_config" not in st.session_state:
+        saved_notify = db.load_notify_config()
+        st.session_state.notify_config = {**DEFAULT_NOTIFY, **(saved_notify or {})}
 
-    if 'fi_health_check_results' not in st.session_state:
+    if "fi_health_check_results" not in st.session_state:
         st.session_state.fi_health_check_results = None
 
-    if 'fi_pending_drill_params' not in st.session_state:
+    if "fi_pending_drill_params" not in st.session_state:
         st.session_state.fi_pending_drill_params = None
 
-    if 'drill_task_id' not in st.session_state:
+    if "drill_task_id" not in st.session_state:
         st.session_state.drill_task_id = None
 
-    if 'drill_in_progress' not in st.session_state:
+    if "drill_in_progress" not in st.session_state:
         st.session_state.drill_in_progress = False
 
-    if 'auto_connect_done' not in st.session_state:
+    if "auto_connect_done" not in st.session_state:
         st.session_state.auto_connect_done = False
+
+    if "_session_runtime_done" not in st.session_state:
+        st.session_state._session_runtime_done = False
 
 
 # ════════════════════════════════════════════════════
 # Session State 访问器
 # ════════════════════════════════════════════════════
+
 
 def get_chaos_injector():
     """获取故障注入器实例"""
@@ -208,6 +227,7 @@ def add_drill_history(record: dict):
 def refresh_drill_history():
     """刷新演练历史（从数据库重新加载）"""
     import db
+
     st.session_state.drill_history = db.load_drill_history()
 
 

@@ -15,6 +15,9 @@ from .config import (
     DEMO_SCENARIO_PRIORITY,
 )
 
+DEMO_MODE_SESSION_KEY = "demo_mode_active"
+DEMO_MODE_RESET_KEY = "demo_mode_reset_requested"
+
 
 def navigate_to_demo_page(nav_key: str) -> None:
     """跳转到指定演示页面。"""
@@ -24,6 +27,38 @@ def navigate_to_demo_page(nav_key: str) -> None:
 
     st.session_state["_nav_page"] = target_page
     st.rerun()
+
+
+def activate_standard_demo() -> None:
+    """开启标准演示模式并跳转到故障注入页。"""
+    st.session_state[DEMO_MODE_SESSION_KEY] = True
+    st.session_state[DEMO_MODE_RESET_KEY] = True
+    navigate_to_demo_page("fault")
+
+
+def clear_demo_mode() -> None:
+    """关闭演示模式。"""
+    st.session_state[DEMO_MODE_SESSION_KEY] = False
+
+
+def render_demo_mode_banner() -> None:
+    """在故障注入页展示演示模式提示。"""
+    if not st.session_state.get(DEMO_MODE_SESSION_KEY):
+        return
+
+    st.success(
+        "🎬 当前处于标准演示模式：已预填推荐场景和参数，适合直接做一次闭环展示。"
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button(
+            "查看演示报告页", key="demo_banner_reports", use_container_width=True
+        ):
+            navigate_to_demo_page("reports")
+    with col2:
+        if st.button("退出演示模式", key="demo_banner_exit", use_container_width=True):
+            clear_demo_mode()
+            st.rerun()
 
 
 def get_latest_history_entry(history: list[dict]) -> dict | None:
@@ -94,7 +129,7 @@ def render_standard_demo_entry(cluster_ready: bool, monitor_ready: bool) -> None
             use_container_width=True,
             type="primary",
         ):
-            navigate_to_demo_page("fault")
+            activate_standard_demo()
     with col2:
         if st.button("查看故障链", key="demo_start_chain", use_container_width=True):
             navigate_to_demo_page("chain")
@@ -155,29 +190,49 @@ def seed_fault_injection_demo_state(scenarios: list[dict], injector) -> None:
     """为故障注入页预填演示默认参数。"""
     scenario_options = [f"{item['name']} - {item['description']}" for item in scenarios]
     preferred_label = _get_preferred_scenario_label(scenarios)
+    reset_requested = bool(st.session_state.get(DEMO_MODE_RESET_KEY))
 
-    if st.session_state.get("fi_scenario_label") not in scenario_options:
+    if (
+        reset_requested
+        or st.session_state.get("fi_scenario_label") not in scenario_options
+    ):
         st.session_state.fi_scenario_label = preferred_label
 
-    st.session_state.setdefault("fi_namespace", DEMO_DRILL_DEFAULTS["namespace"])
-    st.session_state.setdefault("fi_timeout", DEMO_DRILL_DEFAULTS["timeout"])
-    st.session_state.setdefault(
-        "fi_check_interval", DEMO_DRILL_DEFAULTS["check_interval"]
+    _set_demo_value("fi_namespace", DEMO_DRILL_DEFAULTS["namespace"], reset_requested)
+    _set_demo_value("fi_timeout", DEMO_DRILL_DEFAULTS["timeout"], reset_requested)
+    _set_demo_value(
+        "fi_check_interval", DEMO_DRILL_DEFAULTS["check_interval"], reset_requested
     )
-    st.session_state.setdefault("fi_pod_manual", DEMO_DRILL_DEFAULTS["pod_name"])
-    st.session_state.setdefault("fi_cpu_workers", DEMO_DRILL_DEFAULTS["cpu_workers"])
-    st.session_state.setdefault("fi_cpu_load", DEMO_DRILL_DEFAULTS["cpu_load"])
-    st.session_state.setdefault("fi_memory_size", DEMO_DRILL_DEFAULTS["memory_size"])
-    st.session_state.setdefault(
-        "fi_memory_workers", DEMO_DRILL_DEFAULTS["memory_workers"]
+    _set_demo_value("fi_pod_manual", DEMO_DRILL_DEFAULTS["pod_name"], reset_requested)
+    _set_demo_value(
+        "fi_cpu_workers", DEMO_DRILL_DEFAULTS["cpu_workers"], reset_requested
     )
-    st.session_state.setdefault("fi_net_latency", DEMO_DRILL_DEFAULTS["net_latency"])
-    st.session_state.setdefault("fi_net_jitter", DEMO_DRILL_DEFAULTS["net_jitter"])
-    st.session_state.setdefault("fi_disk_path", DEMO_DRILL_DEFAULTS["disk_path"])
-    st.session_state.setdefault(
-        "fi_disk_fault_type", DEMO_DRILL_DEFAULTS["disk_fault_type"]
+    _set_demo_value("fi_cpu_load", DEMO_DRILL_DEFAULTS["cpu_load"], reset_requested)
+    _set_demo_value(
+        "fi_memory_size", DEMO_DRILL_DEFAULTS["memory_size"], reset_requested
     )
-    st.session_state.setdefault("fi_disk_size", DEMO_DRILL_DEFAULTS["disk_size"])
+    _set_demo_value(
+        "fi_memory_workers", DEMO_DRILL_DEFAULTS["memory_workers"], reset_requested
+    )
+    _set_demo_value(
+        "fi_net_latency", DEMO_DRILL_DEFAULTS["net_latency"], reset_requested
+    )
+    _set_demo_value("fi_net_jitter", DEMO_DRILL_DEFAULTS["net_jitter"], reset_requested)
+    _set_demo_value("fi_disk_path", DEMO_DRILL_DEFAULTS["disk_path"], reset_requested)
+    _set_demo_value(
+        "fi_disk_fault_type", DEMO_DRILL_DEFAULTS["disk_fault_type"], reset_requested
+    )
+    _set_demo_value("fi_disk_size", DEMO_DRILL_DEFAULTS["disk_size"], reset_requested)
+
+    if reset_requested:
+        st.session_state["_fi_demo_loaded_namespaces"] = []
+        st.session_state.pop("fi_pod_select", None)
+        st.session_state.pop("_fi_alert_defaults_for", None)
+        st.session_state.pop("fi_verify_alert_enabled", None)
+        st.session_state.pop("fi_expected_alert_name", None)
+        st.session_state.pop("fi_alert_timeout", None)
+        st.session_state.pop("fi_alert_check_interval", None)
+        st.session_state[DEMO_MODE_RESET_KEY] = False
 
     namespace = (
         st.session_state.get("fi_namespace") or DEMO_DRILL_DEFAULTS["namespace"]
@@ -232,3 +287,9 @@ def _autoload_demo_pod_options(injector, namespace: str) -> None:
 
     st.session_state.fi_pod_list = [pod["name"] for pod in pods]
     st.session_state.fi_pod_ns = namespace
+
+
+def _set_demo_value(key: str, value, reset_requested: bool) -> None:
+    """按需设置或重置演示默认值。"""
+    if reset_requested or key not in st.session_state:
+        st.session_state[key] = value

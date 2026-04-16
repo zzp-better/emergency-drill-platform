@@ -13,14 +13,17 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import db
+from ..alert_workflow import render_alert_expectation_form, sync_alert_form_state
 from ..config import SCENARIO_MAP, CHAOS_MESH_SCENARIOS
-from ..demo_mode import seed_fault_injection_demo_state
+from ..demo_mode import render_demo_mode_banner, seed_fault_injection_demo_state
+from ..drill_reporting import render_drill_task_result
 from ..state import (
     init_session_state,
     get_chaos_injector,
     get_monitor_checker,
     get_drill_tasks,
     get_drill_tasks_lock,
+    refresh_drill_history,
 )
 from ..utils import (
     load_scenarios,
@@ -28,7 +31,7 @@ from ..utils import (
     run_health_check,
     display_health_check,
 )
-from ..drill_executor import run_drill_background
+from ..drill_executor import estimate_task_total, run_drill_background
 
 
 # Chaos Mesh 场景类型
@@ -40,6 +43,7 @@ def render():
     init_session_state()
 
     st.title("⚡ 故障注入")
+    render_demo_mode_banner()
 
     # 获取演练任务状态
     drill_tasks = get_drill_tasks()
@@ -77,6 +81,7 @@ def render():
         "选择场景", list(scenario_options.keys()), key="fi_scenario_label"
     )
     scenario = scenario_options[selected]
+    sync_alert_form_state(scenario)
 
     # 检查 Chaos Mesh 要求
     if scenario["type"] in _CHAOS_MESH_SCENARIOS and not use_chaos_mesh:
@@ -117,7 +122,11 @@ def _handle_running_task(drill_tasks, drill_tasks_lock):
         elapsed = task.get("elapsed", 0)
         total = task.get("total", 60)
         scenario_name = task.get("scenario_name", "")
-        st.info(f"⏳ 演练进行中：{scenario_name}  ({elapsed}/{total} 秒)")
+        phase = task.get("phase", "injecting")
+        phase_text = "故障注入中" if phase == "injecting" else "告警验证中"
+        st.info(
+            f"⏳ 演练进行中：{scenario_name} · {phase_text}  ({elapsed}/{total} 秒)"
+        )
         if total > 0:
             st.progress(min(elapsed / total, 1.0))
         st.caption("演练在后台运行，可安全切换到其他页面，完成后返回此页查看结果。")
@@ -127,33 +136,8 @@ def _handle_running_task(drill_tasks, drill_tasks_lock):
     elif task["status"] == "done":
         st.session_state.drill_in_progress = False
         st.session_state.drill_task_id = None
-        entry = task.get("entry", {})
-        if entry:
-            st.session_state.drill_history.append(entry)
-        result = task.get("result", {})
-        st.markdown("---")
-        st.subheader("📊 演练结果")
-        result_data = {
-            "场景名称": entry.get("scenario", ""),
-            "故障类型": entry.get("scenario_type", ""),
-            "命名空间": entry.get("namespace", ""),
-            "Pod 名称": entry.get("pod_name", ""),
-            "演练状态": "✅ 成功" if result.get("success") else "❌ 失败",
-            "耗时": f"{entry.get('duration', 0):.2f} 秒",
-            "完成时间": task.get("end_time_str", ""),
-        }
-        for key, value in result_data.items():
-            st.markdown(f"**{key}**: {value}")
-        if result.get("recovery_time"):
-            st.info(f"📈 Pod 恢复时间: {result['recovery_time']} 秒")
-        if result.get("stdout"):
-            with st.expander("📄 脚本输出 (stdout)"):
-                st.code(result["stdout"], language="text")
-        if result.get("stderr"):
-            with st.expander("⚠ 错误输出 (stderr)"):
-                st.code(result["stderr"], language="text")
-        if result.get("message"):
-            st.info(f"💬 消息: {result['message']}")
+        refresh_drill_history()
+        render_drill_task_result(task)
         with drill_tasks_lock:
             if task_id in drill_tasks:
                 drill_tasks.pop(task_id)
@@ -341,6 +325,11 @@ def _collect_drill_params(scenario, injector):
         if not params.get("script", "").strip():
             st.warning("⚠ 脚本内容不能为空")
 
+    alert_config = render_alert_expectation_form(
+        monitor_available=get_monitor_checker() is not None
+    )
+    params.update(alert_config)
+
     return params
 
 
@@ -391,6 +380,16 @@ def _start_drill(params, drill_tasks, drill_tasks_lock):
         st.error("❌ 脚本内容不能为空")
         return
 
+    if params.get("expected_alert_name") and get_monitor_checker() is None:
+        st.error("❌ 已开启告警验证，但监控未连接，请先在设置页连接 Prometheus")
+        return
+
+    if st.session_state.get("fi_verify_alert_enabled") and not params.get(
+        "expected_alert_name"
+    ):
+        st.error("❌ 已开启告警验证，请填写预期告警名称")
+        return
+
     # 执行健康预检
     with st.spinner("正在执行健康预检..."):
         check_results = run_health_check(namespace, pod_name.strip(), scenario["type"])
@@ -406,14 +405,18 @@ def _start_drill_thread(params: dict, drill_tasks: dict, drill_tasks_lock):
 
     task_id = uuid.uuid4().hex[:8]
     injector = st.session_state.chaos_injector
+    monitor_checker = st.session_state.monitor_checker
     notify_cfg = dict(st.session_state.get("notify_config", {}))
+    total_estimate = estimate_task_total(params)
 
     with drill_tasks_lock:
         drill_tasks[task_id] = {
             "status": "running",
             "elapsed": 0,
-            "total": params.get("timeout", 60),
+            "total": total_estimate,
             "scenario_name": params["scenario"].get("name", task_id),
+            "phase": "injecting",
+            "params_snapshot": _build_params_snapshot(params),
         }
 
     st.session_state.drill_in_progress = True
@@ -431,7 +434,18 @@ def _start_drill_thread(params: dict, drill_tasks: dict, drill_tasks_lock):
             drill_tasks_lock,
             send_notification,
             generate_drill_report,
+            monitor_checker,
         ),
         daemon=True,
     )
     thread.start()
+
+
+def _build_params_snapshot(params: dict) -> dict:
+    """为结果页保留可展示的参数快照。"""
+    snapshot = {}
+    for key, value in params.items():
+        if key in {"scenario", "script"}:
+            continue
+        snapshot[key] = value
+    return snapshot
