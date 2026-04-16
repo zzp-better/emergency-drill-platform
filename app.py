@@ -27,6 +27,20 @@ apply_styles()
 # 初始化会话状态
 init_session_state()
 
+# 支持通过 query_params 跳转页面（首页快捷按钮使用）
+_NAV_PARAM_MAP = {
+    'fault':   '⚡ 故障注入',
+    'chain':   '🔗 故障链',
+    'reports': '📄 演练报告',
+    'settings': '⚙️ 设置',
+    'cluster': '🗂️ 集群资源',
+    'monitor': '📊 监控面板',
+}
+_qp = st.query_params.get('nav', '')
+if _qp in _NAV_PARAM_MAP:
+    st.session_state['_nav_page'] = _NAV_PARAM_MAP[_qp]
+    st.query_params.clear()
+
 # 侧边栏导航
 st.sidebar.markdown(
     '<div style="font-size:1.4rem;font-weight:800;color:#FFFFFF;">应急演练智能平台</div>'
@@ -35,7 +49,13 @@ st.sidebar.markdown(
 )
 st.sidebar.markdown("---")
 
-page = st.sidebar.radio("导航", NAVIGATION_MENU, label_visibility="collapsed")
+_default_idx = 0
+if '_nav_page' in st.session_state:
+    _target = st.session_state.pop('_nav_page')
+    if _target in NAVIGATION_MENU:
+        _default_idx = NAVIGATION_MENU.index(_target)
+
+page = st.sidebar.radio("导航", NAVIGATION_MENU, index=_default_idx, label_visibility="collapsed")
 
 # 路由到对应页面
 if page == '🏠 首页':
@@ -52,3 +72,4 @@ elif page == '⚙️ 设置':
     settings.render()
 elif page == '📊 监控面板':
     monitor.render()
+

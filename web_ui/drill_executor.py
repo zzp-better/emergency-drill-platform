@@ -7,10 +7,8 @@ import os
 import sys
 import time
 import threading
-import uuid
-import json as _json
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Dict, Optional
 
 # 添加 src 目录到 Python 路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -29,13 +27,88 @@ CHAOS_TYPE_MAP = {
 }
 
 
-def run_drill_background(params: dict, task_id: str, injector, notify_cfg: dict, 
+def inject_fault(injector, scenario_type: str, namespace: str, pod_name: str,
+                 duration_str: str, params: dict) -> Optional[Dict]:
+    """
+    统一故障注入调度器（单演练 & 故障链共用）。
+
+    Args:
+        injector: ChaosInjector 实例
+        scenario_type: 场景类型字符串
+        namespace: 命名空间
+        pod_name: Pod 名称
+        duration_str: 持续时间字符串，如 '60s'
+        params: 包含场景特定参数的字典
+
+    Returns:
+        故障注入结果 dict，或 None（未知场景类型时）
+    """
+    if scenario_type == 'pod_crash':
+        return injector.delete_pod(namespace, pod_name)
+    elif scenario_type == 'cpu_stress':
+        return injector.inject_cpu_stress(
+            namespace=namespace,
+            pod_name=pod_name,
+            cpu_workers=params.get('cpu_workers', 1),
+            cpu_load=params.get('cpu_load', 100),
+            duration=duration_str,
+        )
+    elif scenario_type == 'network_delay':
+        return injector.inject_network_delay(
+            namespace=namespace,
+            pod_name=pod_name,
+            latency=params.get('net_latency', '100ms'),
+            jitter=params.get('net_jitter', '10ms'),
+            duration=duration_str,
+        )
+    elif scenario_type == 'disk_io':
+        return injector.inject_disk_failure(
+            namespace=namespace,
+            pod_name=pod_name,
+            path=params.get('disk_path', '/var/log'),
+            fault_type=params.get('disk_fault_type', 'disk_fill'),
+            size=params.get('disk_size', '1Gi'),
+            duration=duration_str,
+        )
+    elif scenario_type == 'memory_stress':
+        return injector.inject_memory_stress(
+            namespace=namespace,
+            pod_name=pod_name,
+            memory_size=params.get('memory_size', '256Mi'),
+            memory_workers=params.get('memory_workers', 1),
+            duration=duration_str,
+        )
+    elif scenario_type == 'custom_script':
+        if not hasattr(injector, 'exec_script'):
+            return {'success': False, 'message': '当前故障注入器不支持自定义脚本，请重启应用后重试'}
+        return injector.exec_script(
+            namespace=namespace,
+            pod_name=pod_name,
+            script=params.get('script', ''),
+            container=params.get('container') or None,
+            timeout=params.get('timeout', 60),
+        )
+    return None
+
+
+def _cleanup_chaos_mesh(injector, scenario_type: str, namespace: str, result: dict):
+    """清理 Chaos Mesh 资源（用户中断时）"""
+    chaos_type_key = CHAOS_TYPE_MAP.get(scenario_type)
+    chaos_name = result.get('chaos_name', '')
+    if chaos_type_key and chaos_name and hasattr(injector, 'chaos_mesh') and injector.chaos_mesh:
+        try:
+            injector.chaos_mesh.delete_chaos(namespace, chaos_name, chaos_type_key)
+        except Exception:
+            pass
+
+
+def run_drill_background(params: dict, task_id: str, injector, notify_cfg: dict,
                          drill_tasks: dict, drill_tasks_lock: threading.Lock,
                          send_notification_func=None, generate_report_func=None):
     """在后台线程执行演练核心逻辑（无任何 st.* 调用）。
-    
+
     结果写入 drill_tasks[task_id]。
-    
+
     Args:
         params: 演练参数
         task_id: 任务ID
@@ -56,43 +129,9 @@ def run_drill_background(params: dict, task_id: str, injector, notify_cfg: dict,
 
     start_time = datetime.now()
     try:
-        result = None
-        if scenario_type == 'pod_crash':
-            result = injector.delete_pod(namespace, safe_pod)
-        elif scenario_type == 'cpu_stress':
-            result = injector.inject_cpu_stress(
-                namespace=namespace,
-                pod_name=safe_pod,
-                cpu_workers=params.get('cpu_workers', 1),
-                cpu_load=params.get('cpu_load', 100),
-                duration=duration_str,
-            )
-        elif scenario_type == 'network_delay':
-            result = injector.inject_network_delay(
-                namespace=namespace,
-                pod_name=safe_pod,
-                latency=params.get('net_latency', '100ms'),
-                jitter=params.get('net_jitter', '10ms'),
-                duration=duration_str,
-            )
-        elif scenario_type == 'disk_io':
-            result = injector.inject_disk_failure(
-                namespace=namespace,
-                pod_name=safe_pod,
-                path=params.get('disk_path', '/var/log'),
-                fault_type=params.get('disk_fault_type', 'disk_fill'),
-                size=params.get('disk_size', '1Gi'),
-                duration=duration_str,
-            )
-        elif scenario_type == 'memory_stress':
-            result = injector.inject_memory_stress(
-                namespace=namespace,
-                pod_name=safe_pod,
-                memory_size=params.get('memory_size', '256Mi'),
-                memory_workers=params.get('memory_workers', 1),
-                duration=duration_str,
-            )
-        else:
+        result = inject_fault(injector, scenario_type, namespace, safe_pod, duration_str, params)
+
+        if result is None:
             with drill_tasks_lock:
                 drill_tasks[task_id] = {'status': 'error', 'error_msg': f'未知的场景类型: {scenario_type}'}
             return
@@ -114,14 +153,7 @@ def run_drill_background(params: dict, task_id: str, injector, notify_cfg: dict,
                             break
 
             if stopped:
-                # 清理 Chaos Mesh 资源
-                chaos_type_key = CHAOS_TYPE_MAP.get(scenario_type)
-                chaos_name = result.get('chaos_name', '')
-                if chaos_type_key and chaos_name and hasattr(injector, 'chaos_mesh') and injector.chaos_mesh:
-                    try:
-                        injector.chaos_mesh.delete_chaos(namespace, chaos_name, chaos_type_key)
-                    except Exception:
-                        pass
+                _cleanup_chaos_mesh(injector, scenario_type, namespace, result)
                 with drill_tasks_lock:
                     if task_id in drill_tasks:
                         drill_tasks[task_id].update({'status': 'stopped'})
@@ -142,7 +174,6 @@ def run_drill_background(params: dict, task_id: str, injector, notify_cfg: dict,
         }
         db.append_drill_history(_entry)
 
-        # 发送通知
         if send_notification_func:
             notify_event = '演练完成' if result.get('success', False) else '演练失败'
             send_notification_func(notify_event, {
@@ -153,7 +184,6 @@ def run_drill_background(params: dict, task_id: str, injector, notify_cfg: dict,
                 'duration': _entry['duration'],
             }, notify_cfg)
 
-        # 生成报告
         if generate_report_func:
             generate_report_func(
                 scenario=scenario,
@@ -185,12 +215,12 @@ def run_drill_background(params: dict, task_id: str, injector, notify_cfg: dict,
             }
 
 
-def run_chain_drill_background(task_id: str, chain_name: str, stages: list, 
+def run_chain_drill_background(task_id: str, chain_name: str, stages: list,
                                 injector, notify_cfg: dict,
                                 drill_tasks: dict, drill_tasks_lock: threading.Lock,
                                 send_notification_func=None):
     """在后台线程顺序执行多步骤故障链（无 st.* 调用）
-    
+
     Args:
         task_id: 任务ID
         chain_name: 故障链名称
@@ -202,18 +232,21 @@ def run_chain_drill_background(task_id: str, chain_name: str, stages: list,
         send_notification_func: 发送通知的函数
     """
     import requests as _req
-    
+
     def _log(msg: str):
-        """记录日志到任务"""
         with drill_tasks_lock:
             if task_id in drill_tasks:
                 if 'logs' not in drill_tasks[task_id]:
                     drill_tasks[task_id]['logs'] = []
                 drill_tasks[task_id]['logs'].append(msg)
 
+    def _check_stop() -> bool:
+        with drill_tasks_lock:
+            return bool(task_id in drill_tasks and drill_tasks[task_id].get('stop_signal'))
+
     start_time = datetime.now()
     stage_results = []
-    
+
     try:
         with drill_tasks_lock:
             if task_id in drill_tasks:
@@ -222,23 +255,20 @@ def run_chain_drill_background(task_id: str, chain_name: str, stages: list,
                 drill_tasks[task_id]['total_stages'] = len(stages)
 
         for idx, stage in enumerate(stages):
-            # 检查停止信号
-            with drill_tasks_lock:
-                if task_id in drill_tasks and drill_tasks[task_id].get('stop_signal'):
-                    with drill_tasks_lock:
-                        if task_id in drill_tasks:
-                            drill_tasks[task_id]['status'] = 'stopped'
-                    return
+            if _check_stop():
+                with drill_tasks_lock:
+                    if task_id in drill_tasks:
+                        drill_tasks[task_id]['status'] = 'stopped'
+                return
 
             stage_type = stage.get('type', 'fault')
-            
+
             with drill_tasks_lock:
                 if task_id in drill_tasks:
                     drill_tasks[task_id]['current_stage'] = idx + 1
                     drill_tasks[task_id]['current_stage_name'] = stage.get('name', f'Stage {idx + 1}')
 
             if stage_type == 'wait':
-                # 等待阶段
                 wait_seconds = stage.get('wait_seconds', 10)
                 _log(f"⏳ 等待 {wait_seconds} 秒...")
                 elapsed_w = 0
@@ -246,22 +276,19 @@ def run_chain_drill_background(task_id: str, chain_name: str, stages: list,
                     sleep_time = min(2, wait_seconds - elapsed_w)
                     time.sleep(sleep_time)
                     elapsed_w += sleep_time
-                    # 检查停止信号
-                    with drill_tasks_lock:
-                        if task_id in drill_tasks and drill_tasks[task_id].get('stop_signal'):
-                            with drill_tasks_lock:
-                                if task_id in drill_tasks:
-                                    drill_tasks[task_id]['status'] = 'stopped'
-                            return
+                    if _check_stop():
+                        with drill_tasks_lock:
+                            if task_id in drill_tasks:
+                                drill_tasks[task_id]['status'] = 'stopped'
+                        return
                 stage_results.append({'stage': idx + 1, 'type': 'wait', 'status': 'success'})
-                _log(f"✓ 等待完成")
+                _log("✓ 等待完成")
 
             elif stage_type == 'alert_check':
-                # 告警检查阶段
                 alert_name = stage.get('alert_name', '')
                 prometheus_url = stage.get('prometheus_url', '')
                 _log(f"🔍 检查告警: {alert_name}")
-                
+
                 try:
                     resp = _req.get(
                         f"{prometheus_url}/api/v1/alerts",
@@ -287,74 +314,29 @@ def run_chain_drill_background(task_id: str, chain_name: str, stages: list,
                     _log(f"✗ 告警检查失败: {e}")
 
             elif stage_type == 'fault':
-                # 故障注入阶段
                 scenario_type = stage.get('scenario', 'cpu_stress')
                 namespace = stage.get('namespace', 'default')
                 pod_name = stage.get('pod_name', '')
                 duration = stage.get('duration', 60)
                 duration_str = f'{duration}s'
-                
+
                 _log(f"💥 执行故障: {scenario_type} -> {pod_name}")
-                
-                result = None
-                if scenario_type == 'pod_crash':
-                    result = injector.delete_pod(namespace, pod_name)
-                elif scenario_type == 'cpu_stress':
-                    result = injector.inject_cpu_stress(
-                        namespace=namespace,
-                        pod_name=pod_name,
-                        cpu_workers=stage.get('cpu_workers', 1),
-                        cpu_load=stage.get('cpu_load', 100),
-                        duration=duration_str,
-                    )
-                elif scenario_type == 'network_delay':
-                    result = injector.inject_network_delay(
-                        namespace=namespace,
-                        pod_name=pod_name,
-                        latency=stage.get('net_latency', '100ms'),
-                        jitter=stage.get('net_jitter', '10ms'),
-                        duration=duration_str,
-                    )
-                elif scenario_type == 'disk_io':
-                    result = injector.inject_disk_failure(
-                        namespace=namespace,
-                        pod_name=pod_name,
-                        path=stage.get('disk_path', '/var/log'),
-                        fault_type=stage.get('disk_fault_type', 'disk_fill'),
-                        size=stage.get('disk_size', '1Gi'),
-                        duration=duration_str,
-                    )
-                elif scenario_type == 'memory_stress':
-                    result = injector.inject_memory_stress(
-                        namespace=namespace,
-                        pod_name=pod_name,
-                        memory_size=stage.get('memory_size', '256Mi'),
-                        memory_workers=stage.get('memory_workers', 1),
-                        duration=duration_str,
-                    )
-                
-                # 等待故障持续时间
+
+                result = inject_fault(injector, scenario_type, namespace, pod_name, duration_str, stage)
+
                 if result and result.get('success') and scenario_type in CHAOS_MESH_SCENARIOS:
                     elapsed_f = 0
                     while elapsed_f < duration:
                         sleep_time = min(5, duration - elapsed_f)
                         time.sleep(sleep_time)
                         elapsed_f += sleep_time
-                        with drill_tasks_lock:
-                            if task_id in drill_tasks and drill_tasks[task_id].get('stop_signal'):
-                                # 清理资源
-                                chaos_type_key = CHAOS_TYPE_MAP.get(scenario_type)
-                                chaos_name = result.get('chaos_name', '')
-                                if chaos_type_key and chaos_name and hasattr(injector, 'chaos_mesh') and injector.chaos_mesh:
-                                    try:
-                                        injector.chaos_mesh.delete_chaos(namespace, chaos_name, chaos_type_key)
-                                    except Exception:
-                                        pass
-                                with drill_tasks_lock:
-                                    if task_id in drill_tasks:
-                                        drill_tasks[task_id]['status'] = 'stopped'
-                                return
-                
+                        if _check_stop():
+                            _cleanup_chaos_mesh(injector, scenario_type, namespace, result)
+                            with drill_tasks_lock:
+                                if task_id in drill_tasks:
+                                    drill_tasks[task_id]['status'] = 'stopped'
+                            return
+
                 stage_results.append({
                     'stage': idx + 1,
                     'type': 'fault',
@@ -363,10 +345,9 @@ def run_chain_drill_background(task_id: str, chain_name: str, stages: list,
                 })
                 _log(f"{'✓' if (result and result.get('success')) else '✗'} 故障注入完成")
 
-        # 所有阶段完成
         end_time = datetime.now()
         total_duration = (end_time - start_time).total_seconds()
-        
+
         with drill_tasks_lock:
             if task_id in drill_tasks:
                 drill_tasks[task_id].update({
@@ -375,7 +356,7 @@ def run_chain_drill_background(task_id: str, chain_name: str, stages: list,
                     'total_duration': total_duration,
                     'end_time_str': end_time.strftime('%Y-%m-%d %H:%M:%S'),
                 })
-        
+
         _log(f"✓ 故障链演练完成，总耗时: {total_duration:.2f}秒")
 
     except Exception as exc:

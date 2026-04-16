@@ -1,0 +1,51 @@
+# 应急演练场景配置 - 自定义脚本执行
+# 在目标 Pod 内执行任意 Shell 脚本，用于模拟自定义故障或验证场景
+
+scenario:
+  name: "自定义脚本执行"
+  description: "在目标 Pod 内执行自定义 Shell 脚本，灵活模拟各类故障或运维操作"
+  type: "custom_script"
+
+# 目标资源
+target:
+  namespace: "default"
+  pod_name: "your-pod-name"
+  # container: ""  # 可选，留空则使用第一个容器
+
+# 脚本配置示例
+script:
+  # 示例：模拟磁盘写满
+  # content: |
+  #   dd if=/dev/zero of=/tmp/fill_disk bs=1M count=500
+  #   echo "磁盘写入完成"
+
+  # 示例：模拟服务假死（消耗 CPU）
+  # content: |
+  #   timeout 30 yes > /dev/null &
+  #   echo "CPU 压力已启动"
+
+  # 示例：检查应用健康状态
+  content: |
+    echo "=== 系统资源状态 ==="
+    df -h
+    free -m
+    echo "=== 进程列表 ==="
+    ps aux | head -20
+
+# 预期结果
+expected:
+  # 脚本预期退出码（0 表示成功）
+  exit_code: 0
+  # 脚本最长执行时间（秒）
+  timeout: 60
+
+# 验证项
+validation:
+  check_recovery: false
+  check_alert: false
+  generate_report: true
+
+# 报告配置
+report:
+  output_dir: "./reports"
+  format: "markdown"

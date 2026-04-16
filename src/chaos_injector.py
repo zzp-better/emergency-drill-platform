@@ -560,6 +560,67 @@ class ChaosInjector:
             duration=duration
         )
 
+    def exec_script(self, namespace: str, pod_name: str, script: str,
+                    container: str = None, timeout: int = 60) -> Dict:
+        """
+        在指定 Pod 内执行自定义 shell 脚本
+
+        参数：
+            namespace: 命名空间
+            pod_name: 目标 Pod 名称
+            script: 要执行的 shell 脚本内容
+            container: 容器名称（可选，不指定时使用第一个容器）
+            timeout: 执行超时时间（秒）
+
+        返回：
+            dict: {'success': bool, 'stdout': str, 'stderr': str, 'message': str}
+        """
+        from kubernetes.stream import stream
+
+        result = {
+            'scenario': 'custom_script',
+            'namespace': namespace,
+            'pod_name': pod_name,
+            'inject_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'success': False,
+            'stdout': '',
+            'stderr': '',
+            'message': '',
+        }
+
+        try:
+            exec_command = ['/bin/sh', '-c', script]
+            kwargs = dict(
+                name=pod_name,
+                namespace=namespace,
+                command=exec_command,
+                stderr=True,
+                stdin=False,
+                stdout=True,
+                tty=False,
+                _preload_content=True,
+            )
+            if container:
+                kwargs['container'] = container
+
+            resp = stream(self.v1.connect_get_namespaced_pod_exec, **kwargs)
+
+            # resp is the combined stdout string when _preload_content=True
+            result['stdout'] = resp if isinstance(resp, str) else ''
+            result['success'] = True
+            result['message'] = '脚本执行完成'
+            logger.info(f"✓ 脚本在 {namespace}/{pod_name} 执行成功")
+        except ApiException as e:
+            result['message'] = f'Kubernetes API 错误: {e.status} - {e.reason}'
+            result['stderr'] = str(e)
+            logger.error(f"✗ 脚本执行失败: {e}")
+        except Exception as e:
+            result['message'] = f'脚本执行异常: {e}'
+            result['stderr'] = str(e)
+            logger.error(f"✗ 脚本执行异常: {e}")
+
+        return result
+
     def load_scenario_config(self, config_path: str) -> Dict:
         """
         加载场景配置文件
